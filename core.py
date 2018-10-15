@@ -138,16 +138,17 @@ class Debug:
     def send(self, msg):
         if (self.isDebug == 1):
             message = str(MOD.secCounter()) + ' # ' + msg + '\r\n'
-            self.serial.send(message)
+            self.serial.send(message, "8N1")
 
 # Для работы с серийным портом
 class Serial:
-    def __init__(self):
+    def __init__(self, speed):
+        self.speed = speed
         self.buffer = ''
 
     # Открывает порт
-    def open(self, speed, byteType):
-        SER.set_speed(speed, byteType)
+    def open(self, bt = "8O1"):
+        SER.set_speed(self.speed, bt)
 
     # Возвращает буффер
     def getBuffer(self, size):
@@ -177,7 +178,9 @@ class Serial:
 
         return data
 
-    def send(self, data):
+    # Отправляет данные
+    def send(self, data, bt = "8O1"):
+        SER.set_speed(self.speed, bt)
         SER.send(data)
 
 # Для работы с модемом через AT команды
@@ -187,8 +190,6 @@ class Gsm:
         self.config = config
         self.debug = debug
         self.serial = serial
-        self.apnResolver = ApnResolver("apn.ini")
-        self.apnResolver.read()
         self.buffer = ''
         self.apnInfo = None
         self.disableRing = TRUE

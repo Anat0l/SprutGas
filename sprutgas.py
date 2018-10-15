@@ -84,21 +84,23 @@ class DirectWorker:
     def __init__(self, config):
         self.config = config
 
-        self.serial = core.Serial()
-        self.serial.open(config.get(SER_SP), config.get(SER_OD))
+        self.serial = core.Serial(config.get(SER_SP))
+        self.serial.open()
         self.debug = core.Debug(config.get(DEBUG_SER) == "1", self.serial)
-        self.gsm = core.Gsm(config, self.serial, self.debug)
-        self.smsManager = core.SmsManager(self.gsm, self.debug)
-        self.alarmStorage = AlarmStorage()
-        self.recepientHelper = RecepientHelper(self.config, self.gsm)
+        
+        self.gsm = core.Gsm(config, self.serial, self.debug)        
+        self.smsManager = core.SmsManager(self.gsm, self.debug)        
+        self.alarmStorage = AlarmStorage()        
+        self.recepientHelper = RecepientHelper(self.config, self.gsm)        
 
         self.devices = []
     
     # Читает состояние с газовых анализаторов
     def readState(self, network):
-        self.serial(str(network))
-        self.serial("\0")
-        resp = self.serial.receive(4)        
+        self.serial.send(chr(network), '8E1')
+        self.serial.send(chr(0), '8E1')
+        resp = self.serial.receive(4)
+        self.debug.send(resp)
         return resp
 
     # Обрабатывает слово состояния газоанализатора
@@ -108,20 +110,29 @@ class DirectWorker:
 
     # Запускает
     def start(self):
+        #self.debug.send("Start work")
         # Отсылает 10 раз 2 байта переинициализации
+        #self.debug.send("Send init bytes")
         for i in xrange(10):
-            self.serial("\0\0")
+            self.serial.send('\x00', '8O1')
+            self.serial.send('\x00', '8E1')
 
         # Сканирует сеть
-        for i in xrange(MAX_ADDRESS):
-            resp = self.readState(i)
-            if resp != None:
-                self.devices.append(i)
+        # self.debug.send("Scan network")
+        # resp = self.readState(1)
+        # if resp != None:
+        #     self.devices.append(1)
 
-        self.work()
+        # for i in xrange(MAX_ADDRESS):
+        #     resp = self.readState(i)
+        #     if resp != None:
+        #         self.devices.append(i)
+
+        # self.work()
     
     # Основная работа
     def work(self):
+        # self.debug.send("Start work")
         while(core.TRUE):
             recepients = self.recepientHelper.getRecepients()
             if len(recepients) < 1:
@@ -139,6 +150,7 @@ class DirectWorker:
                             self.smsManager.sendSms(recepient, txt)
             
             MOD.sleep(WORK_DELAY)
+            break
 
 # Обеспечивает работу в режиме прослушивания БУПС
 class BupsWorker:
@@ -184,14 +196,14 @@ class SmsRecieveWorker:
     # Конструктор
     def __init__(self, config):
         self.config = config
-        self.serial = core.Serial()
-        self.serial.open(config.get(SER_SP), config.get(SER_OD))
+        self.serial = core.Serial(config.get(SER_SP))
+        self.serial.open()
         self.debug = core.Debug(config.get(DEBUG_SER) == "1", self.serial)
         self.gsm = core.Gsm(config, self.serial, self.debug)
         self.smsManager = core.SmsManager(self.gsm, self.debug)
     
     # Запускает
-    def start(self):        
+    def start(self):
         self.work()
     
     # Обрабатывает SMS и возвращает описание тревоги
@@ -218,6 +230,7 @@ class SmsRecieveWorker:
 
 try:
     settings = core.IniFile("settings.ini")
+    settings.read()
     
     mode = settings.get(WORK_MODE)
     worker = None
