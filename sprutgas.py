@@ -15,6 +15,8 @@ SEND_MODE_MODEM = "1"
 # Ключи в настройках
 # Скорость на серийном порту
 SER_SP = "SER_SP"
+# Скорость на серийном порту для отладки
+DEBUG_SER_SP = "DEBUG_SER_SP"
 # Тип байта на серийном порту
 SER_OD = "SER_OD"
 # Выводить отладку
@@ -86,14 +88,20 @@ class DirectWorker:
 
         self.serial = core.Serial(config.get(SER_SP))
         self.serial.open()
-        self.debug = core.Debug(config.get(DEBUG_SER) == "1", self.serial)
+
+        isDebug = config.get(DEBUG_SER) == "1"
+        debugSpeed = config.get(DEBUG_SER_SP)
+        self.debug = core.Debug(isDebug, self.serial, debugSpeed)
         
         self.gsm = core.Gsm(config, self.serial, self.debug)        
+        self.gsm.sendATMdmDefault("ATE0\r", "OK")
+
         self.smsManager = core.SmsManager(self.gsm, self.debug)        
         self.alarmStorage = AlarmStorage()        
         self.recepientHelper = RecepientHelper(self.config, self.gsm)        
 
         self.devices = []
+        self.debug.send("Init complete")
     
     # Читает состояние с газовых анализаторов
     def readState(self, network):
@@ -110,13 +118,14 @@ class DirectWorker:
 
     # Запускает
     def start(self):
-        #self.debug.send("Start work")
+        self.debug.send("Start work")
         # Отсылает 10 раз 2 байта переинициализации
-        #self.debug.send("Send init bytes")
+        self.debug.send("Send init bytes")
         for i in xrange(10):
-            self.serial.send('\x00', '8O1')
-            self.serial.send('\x00', '8E1')
+            self.serial.sendbyte(0, '8O1')
+            self.serial.sendbyte(0, '8E1')
 
+        self.debug.send("Scan network")
         # Сканирует сеть
         # self.debug.send("Scan network")
         # resp = self.readState(1)
@@ -160,7 +169,9 @@ class BupsWorker:
 
         self.serial = core.Serial()
         self.serial.open(config.get(SER_SP), config.get(SER_OD))
-        self.debug = core.Debug(config.get(DEBUG_SER) == "1", self.serial)
+        isDebug = config.get(DEBUG_SER) == "1"
+        debugSpeed = config.get(DEBUG_SER_SP)
+        self.debug = core.Debug(isDebug, self.serial, debugSpeed)
         self.gsm = core.Gsm(config, self.serial, self.debug)
         self.smsManager = core.SmsManager(self.gsm, self.debug)
     

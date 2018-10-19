@@ -131,14 +131,15 @@ class IniFile:
 # Для вывода отладки
 class Debug:
     # isDebug: 1 - выводить сообщение, 0 - не выводить
-    def __init__(self, isDebug, serial):
+    def __init__(self, isDebug, serial, speed):
         self.isDebug = isDebug
         self.serial = serial
+        self.speed = speed
 
     def send(self, msg):
         if (self.isDebug == 1):
             message = str(MOD.secCounter()) + ' # ' + msg + '\r\n'
-            self.serial.send(message, "8N1")
+            self.serial.send(message, "8N1", self.speed)
 
 # Для работы с серийным портом
 class Serial:
@@ -179,9 +180,20 @@ class Serial:
         return data
 
     # Отправляет данные
-    def send(self, data, bt = "8O1"):
-        SER.set_speed(self.speed, bt)
+    def send(self, data, bt = "8O1", speed = None):
+        spd = self.speed
+        if speed != None:
+            spd = speed
+        SER.set_speed(spd, bt)
         SER.send(data)
+    
+    # Отправляет байт
+    def sendbyte(self, byte, bt = "8O1", speed = None):
+        spd = self.speed
+        if speed != None:
+            spd = speed
+        SER.set_speed(spd, bt)
+        SER.sendbyte(byte)
 
 # Для работы с модемом через AT команды
 # Отрефакторить, много мусора
