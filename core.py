@@ -131,25 +131,40 @@ class IniFile:
 # Для вывода отладки
 class Debug:
     # isDebug: 1 - выводить сообщение, 0 - не выводить
-    def __init__(self, isDebug, serial, speed):
+    def __init__(self, isDebug, serial, speed, bytetype):
         self.isDebug = isDebug
         self.serial = serial
         self.speed = speed
+        self.bytetype = bytetype
 
+    # Отправляет в отладку сообщение
     def send(self, msg):
         if (self.isDebug == 1):
             message = str(MOD.secCounter()) + ' # ' + msg + '\r\n'
-            self.serial.send(message, "8N1", self.speed)
+            self.serial.send(message, self.speed, self.bytetype)
+    
+    # Отправляет в отладку байт
+    def sendbyte(self, byte):
+        if (self.isDebug == 1):
+            self.serial.send(str(MOD.secCounter()) + ' # ', self.speed, self.bytetype)
+            self.serial.sendbyte(byte, self.speed, self.bytetype)
+            self.serial.send('\r\n', self.speed, self.bytetype)
 
 # Для работы с серийным портом
 class Serial:
-    def __init__(self, speed):
-        self.speed = speed
+    def __init__(self):
         self.buffer = ''
+        self.lastSpeed = ''
+        self.lastBt = ''
 
     # Открывает порт
-    def open(self, bt = "8O1"):
-        SER.set_speed(self.speed, bt)
+    def open(self, speed, bt):
+        if (self.lastSpeed != speed) or (self.lastBt != bt):            
+            rs = SER.set_speed(speed, bt)
+            if rs == -1:
+                raise Exception, 'Regular. port open failed'
+            self.lastBt = bt
+            self.lastSpeed = speed            
 
     # Возвращает буффер
     def getBuffer(self, size):
@@ -179,20 +194,24 @@ class Serial:
 
         return data
 
+    # Считывает один байт пока не придут данные
+    def receivebyte(self, speed, bt):
+        self.open(speed, bt)
+        return SER.receivebyte()
+            
+    # Считывает один байт с таймаутом
+    def receivebyte(self, speed, bt, timeout=0):
+        self.open(speed, bt)
+        return SER.receivebyte(timeout)
+
     # Отправляет данные
-    def send(self, data, bt = "8O1", speed = None):
-        spd = self.speed
-        if speed != None:
-            spd = speed
-        SER.set_speed(spd, bt)
+    def send(self, data, speed, bt):
+        self.open(speed, bt)
         SER.send(data)
     
     # Отправляет байт
-    def sendbyte(self, byte, bt = "8O1", speed = None):
-        spd = self.speed
-        if speed != None:
-            spd = speed
-        SER.set_speed(spd, bt)
+    def sendbyte(self, byte, speed, bt):
+        self.open(speed, bt)
         SER.sendbyte(byte)
 
 # Для работы с модемом через AT команды

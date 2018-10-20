@@ -1,4 +1,5 @@
 import core
+import MOD
 
 # работа напрямую с газоанализаторами
 DIRECT_MODE = "0"
@@ -17,6 +18,8 @@ SEND_MODE_MODEM = "1"
 SER_SP = "SER_SP"
 # Скорость на серийном порту для отладки
 DEBUG_SER_SP = "DEBUG_SER_SP"
+# Режим работы последовательного порта для отладки
+DEBUG_SER_OD = "DEBUG_SER_OD"
 # Тип байта на серийном порту
 SER_OD = "SER_OD"
 # Выводить отладку
@@ -28,6 +31,10 @@ WORK_MODE = "WORK_MODE"
 
 # Максимальный адрес устройства
 MAX_ADDRESS = 255
+# Таймаут чтения
+READ_TIMEOUT = 40
+# Таймаут ожидания запуска после рестарта
+REBOOT_WAIT_TIMEOUT = 100
 
 # Задержка в работе
 WORK_DELAY = 1
@@ -86,30 +93,50 @@ class DirectWorker:
     def __init__(self, config):
         self.config = config
 
-        self.serial = core.Serial(config.get(SER_SP))
-        self.serial.open()
+        self.speed = config.get(SER_SP)
+        self.serial = core.Serial()
 
         isDebug = config.get(DEBUG_SER) == "1"
         debugSpeed = config.get(DEBUG_SER_SP)
-        self.debug = core.Debug(isDebug, self.serial, debugSpeed)
+        debugBytetype = config.get(DEBUG_SER_OD)
+        self.debug = core.Debug(isDebug, self.serial, debugSpeed, debugBytetype)
         
         self.gsm = core.Gsm(config, self.serial, self.debug)        
         self.gsm.sendATMdmDefault("ATE0\r", "OK")
 
-        self.smsManager = core.SmsManager(self.gsm, self.debug)        
-        self.alarmStorage = AlarmStorage()        
+        self.smsManager = core.SmsManager(self.gsm, self.debug)
+        self.alarmStorage = AlarmStorage()
         self.recepientHelper = RecepientHelper(self.config, self.gsm)        
 
         self.devices = []
-        self.debug.send("Init complete")
+        #self.debug.send("Init complete")
     
     # Читает состояние с газовых анализаторов
     def readState(self, network):
-        self.serial.send(chr(network), '8E1')
-        self.serial.send(chr(0), '8E1')
-        resp = self.serial.receive(4)
-        self.debug.send(resp)
-        return resp
+        self.serial.sendbyte(network, self.speed, '8E1')
+        self.serial.sendbyte(0, self.speed, '8E1')
+        byte1 = self.serial.receivebyte(READ_TIMEOUT)
+        byte2 = self.serial.receivebyte(READ_TIMEOUT)
+        return [byte1, byte2]
+
+    # Находит все устройства в сети
+    def readNetwork(self):
+        # Сканирует сеть
+        devs = []
+        for i in xrange(1, MAX_ADDRESS + 1):
+            self.serial.sendbyte(i, self.speed, '8E1')
+            self.serial.sendbyte(0, self.speed, '8E1')
+            byte1 = self.serial.receivebyte(self.speed, '8E1', 0)
+            byte2 = self.serial.receivebyte(self.speed, '8E1', 0)
+            devs.append([byte1, byte2])
+        
+        res = []
+        for x in devs:
+            id = x[0]
+            if id > 0:
+                res.append(id)
+
+        return res
 
     # Обрабатывает слово состояния газоанализатора
     # Возвращает список тревог
@@ -118,24 +145,26 @@ class DirectWorker:
 
     # Запускает
     def start(self):
-        self.debug.send("Start work")
+        #self.debug.send("Start work")
         # Отсылает 10 раз 2 байта переинициализации
-        self.debug.send("Send init bytes")
+        #self.debug.send("Send init bytes")
         for i in xrange(10):
-            self.serial.sendbyte(0, '8O1')
-            self.serial.sendbyte(0, '8E1')
+            self.serial.sendbyte(0, self.speed, '8M1')
+            self.serial.sendbyte(0, self.speed, '8E1')
 
-        self.debug.send("Scan network")
+        MOD.sleep(REBOOT_WAIT_TIMEOUT)
+
+        self.devices = self.readNetwork()
+
+
         # Сканирует сеть
-        # self.debug.send("Scan network")
+        #self.debug.send("Scan network")
         # resp = self.readState(1)
-        # if resp != None:
-        #     self.devices.append(1)
+        # self.debug.send(str(resp))
+        # if resp[0] > -1:
+        #     self.devices.append(1)                    
 
-        # for i in xrange(MAX_ADDRESS):
-        #     resp = self.readState(i)
-        #     if resp != None:
-        #         self.devices.append(i)
+        self.debug.send(str(self.devices))
 
         # self.work()
     
