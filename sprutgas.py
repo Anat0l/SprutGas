@@ -39,6 +39,10 @@ REBOOT_WAIT_TIMEOUT = 100
 # Задержка в работе
 WORK_DELAY = 1
 
+# Текст сообщений
+NO_CONNECTION_TEXT = "Нет связи с системой СГК"
+CONNECTED_TEXT = "Связь с системой СГК установлена"
+
 # Описание тревоги
 class Alarm:
     # Конструктор
@@ -60,10 +64,13 @@ class RecepientHelper:
     # Возвращает список кому отправить SMS в зависимости от настроек
     def getRecepients(self):
         sendMode = self.config.get(SEND_MODE)
+        data = self.gsm.sendATAndWait("AT&N", "OK")
+        phones = data.split("\n")
+
         if sendMode == SEND_MODE_PHONE:
-            pass
+            return phones
         elif sendMode == SEND_MODE_MODEM:
-            pass
+            return [phones[0]]
 
 # Хранилище тревог
 # Если есть изменение тревоги сигнализирует об этом
@@ -71,7 +78,7 @@ class AlarmStorage:
     # Конструктор
     def __init__(self):
         self.alarms = {}
-    
+
     # Добавляет тревогу
     # Если было изменение, возвращает тревогу
     def add(self, alarm):
@@ -83,11 +90,79 @@ class AlarmStorage:
                 return info
             else:
                 return None
-        else:            
+        else:
             self.alarms[alarm.code] = alarm
             return info
 
+# Парсер тревог полученных от устройства
+class AlarmParser:
+    def __init__(self):
+        pass
+
+    # Парсит тревоги газ анализаторов и первый байт бупса
+    def parseOne(self):
+        alarms = []
+        if (code & 0x40 > 0) and (code & 1 > 0):
+            alarms.append(Alarm(1, "Второй порог СН4"))
+        if (code & 0x40 == 0) and (code & 0x01 > 0):
+            alarms.append(Alarm(2, "Второй порог СО"))
+        if (code & 0x04 > 0):
+            alarms.append(Alarm(3, "Неисправность"))
+        if (code & 0x01 == 0) and (code & 0x02 > 0) and (code & 0x04 == 0) and (code & 0x40 == 0):
+            alarms.append(Alarm(4, "Первый порог СН4"))
+        if (code & 0x01 == 0) and (code & 0x04 == 0) and (code & 0x08 > 0) and (code & 0x40 == 0):
+            alarms.append(Alarm(5, "Первый порог СО"))
+        if (code & 0x01 == 0) and (code & 0x04 == 0) and (code & 0x08 > 0) and (code & 0x40 > 1):
+            alarms.append(Alarm(6, "Первый порог СН4"))
+        if (code & 0x01 == 0) and (code & 0x02 > 0) and (code & 0x04 == 0) and (code & 0x40 > 1):
+            alarms.append(Alarm(7, "Первый порог СО"))
+        if (code & 0x10 == 0):
+            alarms.append(Alarm(8, "Клапан открыт"))
+        if (code & 0x10 > 0):
+            alarms.append(Alarm(9, "Клапан закрыт"))
+        
+        return alarms
+
+    # Парсит тревоги из второго байта бупс
+    def parseTwo(self):
+        alarms = []
+        if (code & 0x81 > 0):
+            alarms.append(Alarm(20, "Постановка на охрану"))
+        if (code & 0x82 > 0):
+            alarms.append(Alarm(21, "Взлом"))
+        if (code & 0x84 > 0):
+            alarms.append(Alarm(22, "Пожар"))
+        if (code & 0x88 > 0):
+            alarms.append(Alarm(23, "Авария 1"))
+        if (code & 0x90 > 0):
+            alarms.append(Alarm(24, "Авария 2"))
+        
+        return alarms
+
+    # Парсит тревоги из третьего байта бупс
+    def parseThree(self):
+        # Не нужен пока что
+        pass
+
+    # Парсит тревоги из четвёртого байта бупс
+    def parseFour(self):
+        alarms = []
+        if (code & 0xC1 > 0):
+            alarms.append(Alarm(40, "Авария 8"))
+        if (code & 0xC2 > 0):
+            alarms.append(Alarm(41, "Авария 9"))
+        if (code & 0xC4 > 0):
+            alarms.append(Alarm(42, "Авария 10"))
+        if (code & 0xC8 > 0):
+            alarms.append(Alarm(43, "Авария 11"))
+        if (code & 0xD0 > 0):
+            alarms.append(Alarm(44, "Авария 12"))
+        
+        return alarms
+
 # Обеспечивает работу в режиме опроса газовых анализаторов
+
+
 class DirectWorker:
     # Конструктор
     def __init__(self, config):
@@ -99,18 +174,20 @@ class DirectWorker:
         isDebug = config.get(DEBUG_SER) == "1"
         debugSpeed = config.get(DEBUG_SER_SP)
         debugBytetype = config.get(DEBUG_SER_OD)
-        self.debug = core.Debug(isDebug, self.serial, debugSpeed, debugBytetype)
+        self.debug = core.Debug(isDebug, self.serial,
+                                debugSpeed, debugBytetype)
         
-        self.gsm = core.Gsm(config, self.serial, self.debug)        
+        self.gsm = core.Gsm(config, self.serial, self.debug)
         self.gsm.sendATMdmDefault("ATE0\r", "OK")
 
         self.smsManager = core.SmsManager(self.gsm, self.debug)
-        self.alarmStorage = AlarmStorage()
-        self.recepientHelper = RecepientHelper(self.config, self.gsm)        
+        self.alarmParser = AlarmParser()
+        self.alarmStorage = AlarmStorage()        
+        self.recepientHelper = RecepientHelper(self.config, self.gsm)
 
         self.devices = []
         #self.debug.send("Init complete")
-    
+
     # Читает состояние с газовых анализаторов
     def readState(self, network):
         self.serial.sendbyte(network, self.speed, '8E1')
@@ -124,24 +201,45 @@ class DirectWorker:
         # Сканирует сеть
         devs = []
         for i in xrange(1, MAX_ADDRESS + 1):
-            self.serial.sendbyte(i, self.speed, '8E1')
-            self.serial.sendbyte(0, self.speed, '8E1')
-            byte1 = self.serial.receivebyte(self.speed, '8E1', 0)
-            byte2 = self.serial.receivebyte(self.speed, '8E1', 0)
-            devs.append([byte1, byte2])
-        
-        res = []
-        for x in devs:
-            id = x[0]
-            if id > 0:
-                res.append(id)
+            rs = self.readState(i)
+            if rs[0] != -1:
+                devs.append(rs[0])
 
-        return res
+        return devs
 
     # Обрабатывает слово состояния газоанализатора
     # Возвращает список тревог
     def processState(self, data):
-        return [Alarm(1, "")]
+        code = data[1]
+        alarms = self.alarmParser.parseOne(code)
+
+        resAlarms = []
+        for alarm in alarms:
+            rs = self.alarmStorage.add(alarm)
+            if rs != None:
+                resAlarms.append(rs)
+
+        return resAlarms
+
+    # Отправляет всем
+    def sendToRecepients(self, text):
+        for recepient in self.recepients:
+            self.smsManager.sendSms(recepient, CONNECTED_TEXT)
+
+    # Обрабатывает SMS с
+    def processSms(self):
+        allSms = self.smsManager.listSms()
+        recepients = []
+        for sms in allSms:
+            for recep in self.recepients:
+                if sms.recepient == recep:
+                    recepients.append(recep)
+
+        # TODO: последнее состояние
+        for rec in recepients:
+            self.smsManager.sendSms(rec, "")
+
+        self.smsManager.deleteAll()
 
     # Запускает
     def start(self):
@@ -155,83 +253,104 @@ class DirectWorker:
         MOD.sleep(REBOOT_WAIT_TIMEOUT)
 
         self.devices = self.readNetwork()
-
-
-        # Сканирует сеть
-        #self.debug.send("Scan network")
-        # resp = self.readState(1)
-        # self.debug.send(str(resp))
-        # if resp[0] > -1:
-        #     self.devices.append(1)                    
+        self.recepients = self.recepientHelper.getRecepients()
 
         self.debug.send(str(self.devices))
+        self.debug.send(str(self.recepients))
 
-        # self.work()
-    
+        # Отправляет SMS всем получателям что установлена связь
+        if len(self.recepients):
+            if len(self.devices):
+                self.sendToRecepients(CONNECTED_TEXT)
+                self.work()
+            else:
+                self.sendToRecepients(NO_CONNECTION_TEXT)
+
     # Основная работа
     def work(self):
         # self.debug.send("Start work")
         while(core.TRUE):
-            recepients = self.recepientHelper.getRecepients()
-            if len(recepients) < 1:
-                MOD.sleep(WORK_DELAY)
-                continue
-
             # Отсылает запрос состояния каждому газоанализатору
+            # TODO: проверка связи и отправка СМС? Что считать за пропадание связи? Связь с одним устройством или со всеми?
             for i in self.devices:
-                resp = readState(i)
-                if resp != None:
-                    alarms = processState(resp)
+                resp = self.readState(i)
+                if resp[0] > 0:
+                    alarms = self.processState(resp)
                     for alarm in alarms:
                         txt = str(alarm.code) + " - " + alarm.text
-                        for recepient in recepients:
+                        for recepient in self.recepients:
                             self.smsManager.sendSms(recepient, txt)
-            
+
+            self.processSms()
+
             MOD.sleep(WORK_DELAY)
             break
 
 # Обеспечивает работу в режиме прослушивания БУПС
+
+
 class BupsWorker:
     # Конструктор
     def __init__(self, config):
-        self.config = config
-
+        self.speed = config.get(SER_SP)
         self.serial = core.Serial()
-        self.serial.open(config.get(SER_SP), config.get(SER_OD))
+
         isDebug = config.get(DEBUG_SER) == "1"
         debugSpeed = config.get(DEBUG_SER_SP)
-        self.debug = core.Debug(isDebug, self.serial, debugSpeed)
+        debugBytetype = config.get(DEBUG_SER_OD)
+        self.debug = core.Debug(isDebug, self.serial,
+                                debugSpeed, debugBytetype)
+
         self.gsm = core.Gsm(config, self.serial, self.debug)
+        self.gsm.sendATMdmDefault("ATE0\r", "OK")
+
         self.smsManager = core.SmsManager(self.gsm, self.debug)
-    
+        self.alarmStorage = AlarmStorage()
+        self.recepientHelper = RecepientHelper(self.config, self.gsm)
+
     # Запускает
     def start(self):
         self.work()
-
-    # Ожидает посылки от БУПС
-    def readBups(self):
-        resp = self.serial.receive(8)
-        return resp
 
     # Обрабатывает пакет БУПС
     def processState(self, data):
         return [Alarm(1, "")]
 
+    # Читает байты
+    def readBups(self):
+        count = 0
+        data = []
+        byte = 0
+        while core.True:
+            byte = self.serial.receivebyte(self.speed, "8E1")
+            if byte == -1:
+                break
+
+            count = count + 1
+            data.append(byte)
+            if count >= 8:
+                break
+
+        if len(data) >= 8:
+            return data
+
     # Основная работа
     def work(self):
-        while(core.TRUE):            
+        while(core.TRUE):
             # Читает из порта пакеты БУПС
-            resp  = self.readBups()
-            if resp != None:
+            resp = self.serial.receivebyte(self.speed, "8E1")
+            if resp != -1:
                 alarms = self.processState(resp)
                 # Отсылает СМС адресату
                 for alarm in alarms:
                     txt = str(alarm.code) + " - " + alarm.text
                     self.smsManager.sendSms(recepient, txt)
-        
+
             MOD.sleep(WORK_DELAY)
 
 # Обеспечивает работу в режиме приема СМС и передачи на пульт
+
+
 class SmsRecieveWorker:
     # Конструктор
     def __init__(self, config):
@@ -241,11 +360,11 @@ class SmsRecieveWorker:
         self.debug = core.Debug(config.get(DEBUG_SER) == "1", self.serial)
         self.gsm = core.Gsm(config, self.serial, self.debug)
         self.smsManager = core.SmsManager(self.gsm, self.debug)
-    
+
     # Запускает
     def start(self):
         self.work()
-    
+
     # Обрабатывает SMS и возвращает описание тревоги
     def processSms(self, sms):
         return Alarm(1, "")
@@ -264,14 +383,15 @@ class SmsRecieveWorker:
                 if alarm != None:
                     # Отсылает 4 байта с тревогами на пульт(адрес пульта в INI)
                     self.sendAlarm(alarm)
-            
+
             self.smsManager.deleteAll()
             MOD.sleep(WORK_DELAY)
+
 
 try:
     settings = core.IniFile("settings.ini")
     settings.read()
-    
+
     mode = settings.get(WORK_MODE)
     worker = None
     if mode == DIRECT_MODE:
@@ -280,7 +400,7 @@ try:
         worker = BupsWorker(settings)
     elif mode == SMS_RECIEVE_MODE:
         worker = SmsRecieveWorker(settings)
-    
+
     worker.start()
 except Exception, e:
     import SER
