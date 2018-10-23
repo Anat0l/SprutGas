@@ -28,11 +28,13 @@ DEBUG_SER = "DEBUG_SER"
 SEND_MODE = "SEND_MODE"
 # Режим работы
 WORK_MODE = "WORK_MODE"
+# Адреса газанализаторов
+GAS_ADDRESS = "GAS_ADDRESS"
 
 # Максимальный адрес устройства
 MAX_ADDRESS = 255
 # Таймаут чтения
-READ_TIMEOUT = 40
+READ_TIMEOUT = 1
 # Таймаут ожидания запуска после рестарта
 REBOOT_WAIT_TIMEOUT = 100
 
@@ -57,15 +59,24 @@ class Alarm:
 # Для получения списка абонентов кому рассылать
 class RecepientHelper:
     # Конструктор
-    def __init__(self, config, gsm):
+    def __init__(self, config, gsm, debug):
         self.config = config
         self.gsm = gsm
+        self.debug = debug
 
     # Возвращает список кому отправить SMS в зависимости от настроек
-    def getRecepients(self):
+    def getRecepients(self):        
         sendMode = self.config.get(SEND_MODE)
-        data = self.gsm.sendATAndWait("AT&N", "OK")
-        phones = data.split("\n")
+        a, s = self.gsm.sendATMdmDefault("AT&N\r", "OK")
+        phoneItems = s.split("\n")
+
+        phones = []
+        for item in phoneItems:
+            its = item.split(";")            
+            if (len(its) == 2):
+                val = its[1].strip()
+                if len(val) > 0:
+                    phones.append(val)
 
         if sendMode == SEND_MODE_PHONE:
             return phones
@@ -161,8 +172,6 @@ class AlarmParser:
         return alarms
 
 # Обеспечивает работу в режиме опроса газовых анализаторов
-
-
 class DirectWorker:
     # Конструктор
     def __init__(self, config):
@@ -183,29 +192,55 @@ class DirectWorker:
         self.smsManager = core.SmsManager(self.gsm, self.debug)
         self.alarmParser = AlarmParser()
         self.alarmStorage = AlarmStorage()        
-        self.recepientHelper = RecepientHelper(self.config, self.gsm)
+        self.recepientHelper = RecepientHelper(self.config, self.gsm, self.debug)
 
         self.devices = []
         #self.debug.send("Init complete")
 
-    # Читает состояние с газовых анализаторов
-    def readState(self, network):
-        self.serial.sendbyte(network, self.speed, '8E1')
-        self.serial.sendbyte(0, self.speed, '8E1')
-        byte1 = self.serial.receivebyte(READ_TIMEOUT)
-        byte2 = self.serial.receivebyte(READ_TIMEOUT)
-        return [byte1, byte2]
+    # Возвращает устройства из файла настроек
+    def getDevices(self):
+        line = self.config.get(GAS_ADDRESS)
+        res = []
+        for item in line.split(","):
+            res.append(int(item))
+        
+        return res
 
-    # Находит все устройства в сети
-    def readNetwork(self):
+    # Считывает состояния всех устройств
+    def readStates(self, devices):
         # Сканирует сеть
-        devs = []
-        for i in xrange(1, MAX_ADDRESS + 1):
-            rs = self.readState(i)
-            if rs[0] != -1:
-                devs.append(rs[0])
+        redevs = {}
 
-        return devs
+        data = []
+        for i in xrange(1, 5 + 1):
+            self.serial.sendbyte(i, self.speed, '8E1')
+            self.serial.sendbyte(0, self.speed, '8E1')
+
+            byte = self.serial.receivebyte(self.speed, "8N1", 0)
+            if byte != -1:
+                data.append(byte)
+            byte = self.serial.receivebyte(self.speed, "8N1", 0)
+            if byte != -1:
+                data.append(byte)
+            
+            if len(data) == 2:
+                redevs[data[0]] = data[1]
+                data = []
+
+        time = MOD.secCounter() + READ_TIMEOUT
+        while core.TRUE:
+            if MOD.secCounter() > time:
+                break
+            
+            byte = self.serial.receivebyte(self.speed, "8N1", 0)
+            if byte != -1:
+                data.append(byte)
+                if len(data) == 2:
+                    redevs[data[0]] = data[1]
+                    data = []
+                time = MOD.secCounter() + READ_TIMEOUT
+
+        return redevs
 
     # Обрабатывает слово состояния газоанализатора
     # Возвращает список тревог
@@ -251,20 +286,22 @@ class DirectWorker:
             self.serial.sendbyte(0, self.speed, '8E1')
 
         MOD.sleep(REBOOT_WAIT_TIMEOUT)
-
-        self.devices = self.readNetwork()
+        
+        self.devices = self.getDevices()
         self.recepients = self.recepientHelper.getRecepients()
 
         self.debug.send(str(self.devices))
         self.debug.send(str(self.recepients))
 
-        # Отправляет SMS всем получателям что установлена связь
-        if len(self.recepients):
-            if len(self.devices):
-                self.sendToRecepients(CONNECTED_TEXT)
-                self.work()
-            else:
-                self.sendToRecepients(NO_CONNECTION_TEXT)
+        # # Отправляет SMS всем получателям что установлена связь
+        # if len(self.recepients):
+        #     if len(self.devices):
+        #         self.sendToRecepients(CONNECTED_TEXT)
+        #         self.work()
+        #     else:
+        #         self.sendToRecepients(NO_CONNECTION_TEXT)
+
+        self.work()
 
     # Основная работа
     def work(self):
@@ -273,13 +310,16 @@ class DirectWorker:
             # Отсылает запрос состояния каждому газоанализатору
             # TODO: проверка связи и отправка СМС? Что считать за пропадание связи? Связь с одним устройством или со всеми?
             for i in self.devices:
-                resp = self.readState(i)
-                if resp[0] > 0:
+                states = self.readStates(self.devices)
+                for item in states.items():
+                    self.debug.send(str(item))
                     alarms = self.processState(resp)
+                    self.debug.send(str(alarms))
                     for alarm in alarms:
                         txt = str(alarm.code) + " - " + alarm.text
-                        for recepient in self.recepients:
-                            self.smsManager.sendSms(recepient, txt)
+                        self.debug.send(txt)
+                        # for recepient in self.recepients:
+                        #     self.smsManager.sendSms(recepient, txt)
 
             self.processSms()
 

@@ -7,6 +7,9 @@ import MOD
 TRUE = 1
 FALSE = 0
 
+# Максимальная длина принимаемого сообщения
+MAX_DATA_LENGTH = 1500
+
 # Данные INI файла
 # Разделитель ::
 # Значения ключа хранятся в виде массива
@@ -329,7 +332,7 @@ class Gsm:
 
         # Команды инициализации сокета
         socketCommand = 'AT#SCFG=1,1,' + \
-            self.config.get('MAX_DATA_LENGTH') + ',90,30,2\r'
+            str(MAX_DATA_LENGTH) + ',90,30,2\r'
         socketCommandExt = 'AT#SCFGEXT=1,1,0,0,0,0\r'
 
         # Инициализирует сокет
@@ -530,7 +533,7 @@ class Gsm:
     # Получает данные от модема
     def receiveData(self, mdm):
         data = ''
-        size = int(self.config.get('MAX_DATA_LENGTH'))
+        size = MAX_DATA_LENGTH
         while(1):
             rcv = mdm.read()
             if(len(rcv) > 0):
@@ -617,7 +620,7 @@ class SmsManager:
 
     # Возвращает список новых СМС
     def listSms(self):
-        self.debug.send("listSms")
+        self.debug.send("List Sms")
         self.gsm.sendATMdm('AT+CMGL="ALL"\r')
         lst = []
         strData = ""
