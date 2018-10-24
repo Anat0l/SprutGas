@@ -48,10 +48,10 @@ CONNECTED_TEXT = "Связь с системой СГК установлена"
 # Описание тревоги
 class Alarm:
     # Конструктор
-    # code - код тревоги
-    # state - состояние: вкл/откл
+    # code - код тревоги    
     # txt - текстовое описание
-    def __init__(self, code, state, text):
+    # state - состояние: вкл/откл
+    def __init__(self, code, text, state = core.TRUE):
         self.code = code
         self.state = state
         self.text = text
@@ -72,7 +72,7 @@ class RecepientHelper:
 
         phones = []
         for item in phoneItems:
-            its = item.split(";")            
+            its = item.split(";")
             if (len(its) == 2):
                 val = its[1].strip()
                 if len(val) > 0:
@@ -90,20 +90,35 @@ class AlarmStorage:
     def __init__(self):
         self.alarms = {}
 
-    # Добавляет тревогу
-    # Если было изменение, возвращает тревогу
-    def add(self, alarm):
-        if self.alarms.has_key(alarm.code):
-            info = self.alarms[alarm.code]
-            if info.state != alarm.state:
-                info.state = alarm.state
-                info.text = alarm.text
-                return info
-            else:
-                return None
-        else:
-            self.alarms[alarm.code] = alarm
-            return info
+    # Сравнивает
+    def add(self, alarms):
+        res = []  # Снятые тревоги
+        # Ищет снятые тревоги
+        for item in self.alarms.items():
+            key = item[0]
+            storedAlarm = item[1]
+            found = core.FALSE
+            for inAlarm in alarms:
+                if inAlarm.code == storedAlarm.code:
+                    found = core.TRUE
+                    break
+            
+            # Сохранённая тревога не найдена == снятие тревоги
+            if found == core.FALSE:
+                res.append(Alarm(storedAlarm.code, storedAlarm.text, core.FALSE))
+        
+        # Удаляет снятые тревоги
+        for alarm in res:
+            del self.alarms[alarm.code]
+
+        # Ищет установленные тревоги
+        for inAlarm in alarms:
+            if not self.alarms.has_key(inAlarm.code):
+                alarm = Alarm(inAlarm.code, inAlarm.text)
+                self.alarms[inAlarm.code] = alarm
+                res.append(alarm)
+
+        return res
 
 # Парсер тревог полученных от устройства
 class AlarmParser:
@@ -111,7 +126,7 @@ class AlarmParser:
         pass
 
     # Парсит тревоги газ анализаторов и первый байт бупса
-    def parseOne(self):
+    def parseOne(self, code):
         alarms = []
         if (code & 0x40 > 0) and (code & 1 > 0):
             alarms.append(Alarm(1, "Второй порог СН4"))
@@ -135,7 +150,7 @@ class AlarmParser:
         return alarms
 
     # Парсит тревоги из второго байта бупс
-    def parseTwo(self):
+    def parseTwo(self, code):
         alarms = []
         if (code & 0x81 > 0):
             alarms.append(Alarm(20, "Постановка на охрану"))
@@ -151,12 +166,12 @@ class AlarmParser:
         return alarms
 
     # Парсит тревоги из третьего байта бупс
-    def parseThree(self):
+    def parseThree(self, code):
         # Не нужен пока что
         pass
 
     # Парсит тревоги из четвёртого байта бупс
-    def parseFour(self):
+    def parseFour(self, code):
         alarms = []
         if (code & 0xC1 > 0):
             alarms.append(Alarm(40, "Авария 8"))
@@ -244,16 +259,10 @@ class DirectWorker:
 
     # Обрабатывает слово состояния газоанализатора
     # Возвращает список тревог
-    def processState(self, data):
+    def processState(self, data):        
         code = data[1]
-        alarms = self.alarmParser.parseOne(code)
-
-        resAlarms = []
-        for alarm in alarms:
-            rs = self.alarmStorage.add(alarm)
-            if rs != None:
-                resAlarms.append(rs)
-
+        alarms = self.alarmParser.parseOne(code)        
+        resAlarms = self.alarmStorage.add(alarms)
         return resAlarms
 
     # Отправляет всем
@@ -275,6 +284,11 @@ class DirectWorker:
             self.smsManager.sendSms(rec, "")
 
         self.smsManager.deleteAll()
+
+    # Проверяет есть ли связь. Отсылает SMS если не было связи в течении 3-х минут
+    # Или отсылает SMS что связь появилась
+    def checkConnection(self):
+        pass
 
     # Запускает
     def start(self):
@@ -306,25 +320,31 @@ class DirectWorker:
     # Основная работа
     def work(self):
         # self.debug.send("Start work")
-        while(core.TRUE):
+        #while(core.TRUE):
+        for x in xrange(1, 3):
             # Отсылает запрос состояния каждому газоанализатору
             # TODO: проверка связи и отправка СМС? Что считать за пропадание связи? Связь с одним устройством или со всеми?
-            for i in self.devices:
-                states = self.readStates(self.devices)
-                for item in states.items():
-                    self.debug.send(str(item))
-                    alarms = self.processState(resp)
-                    self.debug.send(str(alarms))
-                    for alarm in alarms:
-                        txt = str(alarm.code) + " - " + alarm.text
-                        self.debug.send(txt)
-                        # for recepient in self.recepients:
-                        #     self.smsManager.sendSms(recepient, txt)
+            
+            states = self.readStates(self.devices)
+            self.debug.send("STATES COUNT: " + str(len(states)))
+            for item in states.items():
+                self.debug.send(str(item))
+                alarms = self.processState(item)
+                self.debug.send("ALARMS COUNT: " + str(len(alarms)))
+                for alarm in alarms:
+                    txt = str(alarm.code) + " - " + alarm.text
+                    self.debug.send(txt)
+                    # for recepient in self.recepients:
+                    #     self.smsManager.sendSms(recepient, txt)
 
+            # Проверяет есть ли связь. Отсылает SMS если не было связи в течении 3-х минут
+            # Или отсылает SMS что связь появилась
+            self.checkConnection()
+
+            # Получает СМС и отправляет последнее состояние
             self.processSms()
 
             MOD.sleep(WORK_DELAY)
-            break
 
 # Обеспечивает работу в режиме прослушивания БУПС
 
