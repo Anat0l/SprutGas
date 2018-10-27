@@ -10,6 +10,38 @@ FALSE = 0
 # Максимальная длина принимаемого сообщения
 MAX_DATA_LENGTH = 1500
 
+SYMBOLS = { 
+    "D090": 1040, "D091": 1041, "D092": 1042, "D093": 1043, "D094": 1044, "D095": 1045,
+    "D081": 1025, "D096": 1046, "D097": 1047, "D098": 1048, "D099": 1049, "D09A": 1050,
+    "D09B": 1051, "D09C": 1052, "D09D": 1053, "D09E": 1054, "D09F": 1055, "D0A0": 1056,
+    "D0A1": 1057, "D0A2": 1058, "D0A3": 1059, "D0A4": 1060, "D0A5": 1061, "D0A6": 1062,
+    "D0A7": 1063, "D0A8": 1064, "D0A9": 1065, "D0AA": 1066, "D0AB": 1067, "D0AC": 1068,
+    "D0AD": 1069, "D0AE": 1070, "D0AF": 1071, "D0B0": 1072, "D0B1": 1073, "D0B2": 1074,
+    "D0B3": 1075, "D0B4": 1076, "D0B5": 1077, "D191": 1105, "D0B6": 1078, "D0B7": 1079,
+    "D0B8": 1080, "D0B9": 1081, "D0BA": 1082, "D0BB": 1083, "D0BC": 1084, "D0BD": 1085,
+    "D0BE": 1086, "D0BF": 1087, "D180": 1088, "D181": 1089, "D182": 1090, "D183": 1091,
+    "D184": 1092, "D185": 1093, "D186": 1094, "D187": 1095, "D188": 1096, "D189": 1097,
+    "D18A": 1098, "D18B": 1099, "D18C": 1100, "D18D": 1101, "D18E": 1102, "D18F": 1103
+}
+
+# Кодирует в UCS-2
+def encodeUcs2(text):
+    s = ''
+    i = 0
+    while i < len(text):        
+        c = ord(text[i])
+        if c > 128:
+            c2 = ord(text[i + 1])
+            cod = ('%02X' % c) + ('%02X' % c2)
+            # print(cod)
+            c = SYMBOLS[cod]
+            i = i + 1        
+
+        s = s + '%04X' % c
+        i = i + 1                            
+
+    return s
+
 # Данные INI файла
 # Разделитель ::
 # Значения ключа хранятся в виде массива
@@ -327,31 +359,13 @@ class Gsm:
         self.initCreg()
         # Получает уровень сигнала
         self.initCsq()
-        # Инициализирует LED
-        self.initLed(LED_MODE)
-
-        # Команды инициализации сокета
-        socketCommand = 'AT#SCFG=1,1,' + \
-            str(MAX_DATA_LENGTH) + ',90,30,2\r'
-        socketCommandExt = 'AT#SCFGEXT=1,1,0,0,0,0\r'
-
-        # Инициализирует сокет
-        self.initSocket(socketCommand, socketCommandExt)
-        # Инициализирует APN
-        self.initApn()
 
     def initModem(self):
         self.sendATMdmDefault('ATE0\r', 'OK')
         self.sendATMdmDefault('AT\\R0\r', 'OK')
         self.sendATMdmDefault(
             'AT#ENHRST=2,' + self.config.get('REBOOT_PERIOD') + '\r', 'OK')
-
-        # Устанавливает скорость работы
-        speed = self.config.get('SER_SP')
-        atCommand = "AT+IPR=" + speed + "\r"
-        self.debug.send(atCommand)
-        self.sendATMdmDefault(atCommand, 'OK')
-
+        
         self.debug.send('initModem() passed OK')
 
     # Инициализирует SIM карту
@@ -398,126 +412,6 @@ class Gsm:
     def initCsq(self):
         sig = self.getSignal()
         self.debug.send('initCsq() passed OK ' + sig)
-
-    # Устанавливает параметры LED
-    def initLed(self, mode, onDur = None, offDur = None):
-        val = str(mode)
-        if onDur != None:
-            val = val + ',' + str(onDur)
-            if offDur != None:
-                val = val + ',' + str(offDur)
-                
-        self.sendATMdmAndWait('AT#SLED='+ val +'\r', 'OK')
-        self.sendATMdmAndWait('AT#SLEDSAV\r', 'OK')
-
-    # Инициализирует режим запуска
-    def initStartMode(self):
-        mode = self.config.get('STARTMODESCR')
-        self.sendATMdmDefault('AT#STARTMODESCR=' + mode + '\r', 'OK')
-        self.debug.send('initStartMode() passed OK')
-
-    # Инициализирует APN
-    def initApn(self):
-        apn = self.config.get('APN')
-
-        # Если автоматическое определение
-        if self.config.get('APN_SETTINGS') == '1':
-            self.debug.send("Detecting APN")
-            # Читает IMSI
-            at_timeout = int(self.config.get('TIMEOUT_AT'))
-            a, s = self.sendATMdmAndWait('AT#CIMI\r', 'OK', 10, at_timeout)
-            if (a < 0):
-                raise Exception, 'Regular. initContext() failed'
-            imsi = s.split(" ")[1]
-            operator = imsi[3:5]
-            self.apnInfo = self.apnResolver.get(operator)
-            if self.apnInfo != None:
-                apn = self.apnInfo.apn
-                self.debug.send("APN Detected: " + apn)
-
-        self.debug.send("Using APN: " + apn)
-        self.sendATMdmDefault('AT+CGDCONT=1,"IP","' + apn + '"\r', 'OK')
-
-    # Активирует GPRS
-    def activateGprs(self):
-        timeout = int(self.config.get('TIMEOUT_PDP'))
-        a, s = self.sendATMdmAndWait('AT#SGACT=1,0\r', 'OK', 5, timeout)
-        if (a == 0):
-            user = self.config.get('GPRS_USER')
-            password = self.config.get('GPRS_PASSWD')
-            if self.apnInfo != None:
-                user = self.apnInfo.user
-                password = self.apnInfo.password
-
-            a, s = self.sendATMdmAndWait('AT#SGACT=1,1,"' + user +
-                                         '","' + password + '"\r', 'OK', 10, timeout)
-            if (a == 0):
-                str_IP = s.split(chr(13))
-                i_str_IP = str_IP[1].find(': ')
-                My_IP = str_IP[1][i_str_IP + 2:]
-                self.debug.send('GPRS CONTEXT activated ... OK  IP: ' + My_IP)
-                return My_IP
-        raise Exception, 'Regular. Activate GPRS CONTEXT failed'
-
-    # Проверяет GPRS
-    def checkGprs(self):
-        timeout = int(self.config.get('TIMEOUT_MDM'))
-        a, s = self.sendATMdmAndWait('AT#SGACT?\r', 'OK', 10, timeout)
-        d = s.find('#SGACT:')
-        if (d != -1):
-            if (s[d + 10]) == '1':
-                return TRUE
-        return FALSE
-
-    # Инициализирует сокер
-    def initSocket(self, scfg, scfgext):
-        self.sendATMdmDefault(scfg, 'OK')
-        self.sendATMdmDefault(scfgext, 'OK')
-        self.debug.send('initSocket() passed OK')
-
-    # Открывает подключение к серверу
-    def connect(self, socket, ip, port, trys):
-        timeout = int(self.config.get('TIMEOUT_TCP'))
-        if(socket == '1'):
-            a, s = self.sendATMdm2AndWait(
-                'AT#SD=' + socket + ',0,' + port + ',"' + ip + '",0,1,0\r', 'CONNECT', trys, timeout)
-        else:
-            a, s = self.sendATMdm2AndWait('AT#SD=' + socket + ',0,' + port +
-                                          ',"' + ip + '",0,1,1\r', 'OK', trys, timeout)
-        if (a < 0):
-            raise Exception, 'Regular. TCP connection on socket'
-        self.debug.send('Socket ' + socket +
-                        ' connected to ' + ip + ':' + port)
-
-    # Проверка доступности узла
-    def ping(self, ip):
-        timeout = int(self.config.get('TIMEOUT_TCP'))
-        a, s = self.sendATMdmAndWait('AT#PING="' + ip + '",1,32,' +
-                                     self.config.get('PING_TIMEOUT') + ',128\r', 'OK', 1, timeout)
-        if ((a < 0) or (s.find('600,255') != -1)):
-            self.debug.send('ERROR. ping() to ' + ip + ' failed')
-            return (-1)
-        self.debug.send('ping() to ' + ip + ' OK')
-        return (0)
-
-    def checkSocket(self, socket):
-        timeout = int(self.config.get('TIMEOUT_MDM'))
-        a, s = self.sendATMdmAndWait(
-            'AT#SS=' + socket + '\r', 'OK', 10, timeout)
-        d = s.find('#SS:')
-        if (d != -1):
-            return(s[d + 7])
-        raise Exception, 'Regular. checkSocket() failed'
-
-    # Получает IMEI
-    def getImei(self):
-        a, s = self.sendATMdmDefault('AT+CGSN\r', 'OK')
-        self.debug.send('IMEI RAW: ' + s)
-        if(a < 0):
-            self.debug.send('ERROR. getImei() failed')
-            return '0'
-        imei = s.strip()[:15]
-        return imei
 
     # Возвращает буффер с данными
     def getBuffer(self, size):
@@ -615,7 +509,8 @@ class SmsManager:
     # Отправляет СМС
     def sendSms(self, recepient, text):
         self.gsm.sendATMdmDefault('AT+CMGS="' + recepient +'",145\r', ">")
-        self.gsm.sendATMdm(text)
+        txt = encodeUcs2(text)
+        self.gsm.sendATMdm(txt)
         self.gsm.sendATMdmDefault('\x1a', "OK") # отсылает CTRL+Z
 
     # Возвращает список новых СМС

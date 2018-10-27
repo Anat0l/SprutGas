@@ -59,6 +59,9 @@ class DeviceInfo:
         self.network = network
         self.connected = core.FALSE
         self.onConnectionTimeout = 0
+    
+    def __str__(self):
+        return str(self.network)
 
 # Описание тревоги
 class Alarm:
@@ -217,23 +220,36 @@ class DirectWorker:
                                 debugSpeed, debugBytetype)
         
         self.gsm = core.Gsm(config, self.serial, self.debug)
-        self.gsm.sendATMdmDefault("ATE0\r", "OK")
+        self.gsm.simpleInit()
 
         self.smsManager = core.SmsManager(self.gsm, self.debug)
+        self.smsManager.initContext()
         self.alarmParser = AlarmParser()
         self.alarmStorage = AlarmStorage()        
         self.recepientHelper = RecepientHelper(self.config, self.gsm, self.debug)
-        self.globalConnected = core.FALSE
+        self.globalConnected = None
+        # Таймаут отсутствия связи в неопределенном состоянии
+        self.onConnectionTimeout = MOD.secCounter() + CONNECTION_TIMEOUT
 
         self.devices = []
-        #self.debug.send("Init complete")
+        self.initWatchdog()
+
+    # Инициализирует охранный таймер
+    def initWatchdog(self):
+        MOD.watchdogEnable(int(self.config.get('WATCHDOG_PERIOD')))
+
+    # Сбрасывает охранный таймер
+    def resetWatchdog(self):
+        MOD.watchdogReset()
 
     # Возвращает устройства из файла настроек
     def getDevices(self):
         line = self.config.get(GAS_ADDRESS)
         res = []
         for item in line.split(","):
-            res.append(DeviceInfo(int(item)))
+            dev = DeviceInfo(int(item))
+            dev.onConnectionTimeout = MOD.secCounter() + CONNECTION_TIMEOUT
+            res.append(dev)
         
         return res
 
@@ -283,11 +299,13 @@ class DirectWorker:
     # Отправляет всем
     def sendToRecepients(self, text):
         for recepient in self.recepients:
-            #self.smsManager.sendSms(recepient, CONNECTED_TEXT)
-            self.debug.send(text)
+            self.debug.send("SEND ALARM TO RECEPIENTS")
+            self.smsManager.sendSms(recepient, CONNECTED_TEXT)            
+            #self.debug.send(text)
 
     # Обрабатывает SMS с командой
     def processSms(self):
+        self.debug.send("Process SMS")
         allSms = self.smsManager.listSms()
         recepients = []
         for sms in allSms:
@@ -295,63 +313,84 @@ class DirectWorker:
                 if sms.recepient == recep:
                     recepients.append(recep)
         
-        for rec in recepients:
-            count = self.alarmStorage.alarms
-            # Клапан или открыт или закрыт
-            if count == 0:
-                self.sendToRecepients("Состояние неизвестно")
-            if count == 1:
-                alarm = self.alarmStorage.alarms.items()[0]
-                self.sendToRecepients("Аварий нет. " + alarm.text)
-            else:
-                clapanIsOpen = core.FALSE
-                txt = ""
-                for alarm in self.alarmStorage.alarms.items():
-                    if alarm.code == CLAPAN_OPENED:
-                        clapanIsOpen = core.TRUE
-                    elif alarm.code == CLAPAN_CLOSED:
-                        clapanIsOpen = core.FALSE
-                    else:
-                        txt = txt + alarm.text + ", "
-                
-                if clapanIsOpen == core.TRUE:
-                    txt = txt + "Клапан открыт"
+        self.debug.send(str(recepients))
+        count = len(self.alarmStorage.alarms)
+        txt = ""
+        # Клапан или открыт или закрыт
+        if count == 0:
+            txt = "Состояние неизвестно"
+        elif count == 1:
+            alarm = self.alarmStorage.alarms.items()[0][1]
+            txt = "Аварий нет. " + alarm.text
+        else:
+            clapanIsOpen = core.FALSE
+            for item in self.alarmStorage.alarms.items():
+                alarm = item[1]
+                if alarm.code == CLAPAN_OPENED:
+                    clapanIsOpen = core.TRUE
+                elif alarm.code == CLAPAN_CLOSED:
+                    clapanIsOpen = core.FALSE
                 else:
-                    txt = txt + "Клапан закрыт"
-                
-                self.sendToRecepients(txt)
+                    txt = txt + alarm.text + ", "
+            
+            if clapanIsOpen == core.TRUE:
+                txt = txt + "Клапан открыт"
+            else:
+                txt = txt + "Клапан закрыт"                    
+
+        for rec in recepients:
+            self.smsManager.sendSms(rec, txt)
 
         self.smsManager.deleteAll()
 
     # Проверяет есть ли связь. Отсылает SMS если не было связи в течении 3-х минут
     # Или отсылает SMS что связь появилась
     def checkConnection(self, states):
+        self.debug.send("Check connection")
+        self.debug.send(str(len(states)))
+
         for network in states.keys():
             found = core.FALSE
             for dev in self.devices:
                 if network == dev.network:
-                    dev.connected = core.TRUE
+                    found = core.TRUE
                     break
                         
             dev.connected = found
-            connected = core.TRUE
             if found == core.TRUE:
                 dev.onConnectionTimeout = MOD.secCounter() + CONNECTION_TIMEOUT
             else:
                 # Таймаут превышен
                 if MOD.secCounter() >= dev.onConnectionTimeout:
-                    connected = core.FALSE
+                    dev.connected = core.FALSE
 
+        connected = core.TRUE
+        for dev in self.devices:
+            if dev.connected == core.FALSE:
+                connected = core.FALSE
+                break
+
+        self.debug.send("Connected: " + str(connected))
+        self.debug.send("Global Connected: " + str(self.globalConnected))
+        
+        # Если неопределённое состояние
+        if self.globalConnected == None:
+            if (connected == core.FALSE) and (MOD.secCounter() > self.onConnectionTimeout):
+                self.sendToRecepients(NO_CONNECTION_TEXT)
+                self.globalConnected = core.FALSE
+            elif connected == core.TRUE:
+                self.sendToRecepients(CONNECTED_TEXT)
+                self.globalConnected = core.TRUE
         # Если находится в состоянии подключения
         # Отсылает СМС и устанавливает состояние не соединено
-        if self.globalConnected == core.TRUE:            
+        elif self.globalConnected == core.TRUE:
             if connected == core.FALSE:
                 self.sendToRecepients(NO_CONNECTION_TEXT)
                 self.globalConnected = core.FALSE
         # Если не подключен
         else:
             if connected == core.TRUE:
-                self.sendToRecepients(CONNECTION_TEXT)
+                self.sendToRecepients(CONNECTED_TEXT)
                 self.globalConnected = core.TRUE
 
     # Запускает
@@ -379,8 +418,8 @@ class DirectWorker:
     # Основная работа
     def work(self):
         # self.debug.send("Start work")
-        #while(core.TRUE):
-        for x in xrange(1, 3):
+        while(core.TRUE):
+        #for x in xrange(1, 3):
             # Отсылает запрос состояния каждому газоанализатору
             states = self.readStates(self.devices)
             # Проверяет есть ли связь. Отсылает SMS если не было связи в течении 3-х минут
@@ -398,8 +437,8 @@ class DirectWorker:
 
             # Получает СМС и отправляет последнее состояние
             self.processSms()
-
-            MOD.sleep(WORK_DELAY)
+            # Сбрасывает охранный таймер
+            self.resetWatchdog()
 
 # Обеспечивает работу в режиме прослушивания БУПС
 class BupsWorker:
