@@ -540,7 +540,7 @@ class SmsManager:
                 headerDataItems = headerItems[1].split(",")
                 id = int(headerDataItems[0])
                 i = i + 1
-                recepient = headerDataItems[2]
+                recepient = headerDataItems[2].replace('"', "")
                 data = items[i].strip()
                 sms = SmsData(id, recepient, data)
                 lst.append(sms)

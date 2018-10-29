@@ -30,13 +30,17 @@ SEND_MODE = "SEND_MODE"
 WORK_MODE = "WORK_MODE"
 # Адреса газанализаторов
 GAS_ADDRESS = "GAS_ADDRESS"
+# Период проверки СМС
+SMS_READ_PERIOD = "SMS_READ_PERIOD"
+# Период срабатывания охранного таймера
+WATCHDOG_PERIOD = "WATCHDOG_PERIOD"
+# Таймаут отсутствия связи
+CONNECTION_TIMEOUT = "CONNECTION_TIMEOUT"
 
 # Максимальный адрес устройства
 MAX_ADDRESS = 255
 # Таймаут чтения
 READ_TIMEOUT = 1
-# Таймаут отсутствия связи
-CONNECTION_TIMEOUT = 60 * 3
 # Таймаут ожидания запуска после рестарта
 REBOOT_WAIT_TIMEOUT = 100
 
@@ -221,29 +225,29 @@ class DirectWorker:
         
         self.gsm = core.Gsm(config, self.serial, self.debug)
         self.gsm.simpleInit()
+        
+        self.smsManager = core.SmsManager(self.gsm, self.debug)        
+        self.smsManager.initContext()        
+        self.smsReadTimer = 0        
+        self.resetSmsTimer()        
 
-        self.smsManager = core.SmsManager(self.gsm, self.debug)
-        self.smsManager.initContext()
-        self.smsReadTimer = 0
-        self.resetSmsTimer()
-
-        self.alarmParser = AlarmParser()
+        self.alarmParser = AlarmParser()        
         self.alarmStorage = AlarmStorage()        
-        self.recepientHelper = RecepientHelper(self.config, self.gsm, self.debug)
+        self.recepientHelper = RecepientHelper(self.config, self.gsm, self.debug)        
         self.globalConnected = None
+        
         # Таймаут отсутствия связи в неопределенном состоянии
-        self.onConnectionTimeout = MOD.secCounter() + CONNECTION_TIMEOUT
-
+        self.onConnectionTimeout = MOD.secCounter() + int(self.config.get(CONNECTION_TIMEOUT))
         self.devices = []
         self.initWatchdog()
 
     # Сбрасывает таймер чтения СМС
     def resetSmsTimer(self):
-        self.smsReadTimer = MOD.secCounter() + int(self.config.get('SMS_READ_PERIOD'))
+        self.smsReadTimer = MOD.secCounter() + int(self.config.get(SMS_READ_PERIOD))
 
     # Инициализирует охранный таймер
     def initWatchdog(self):
-        MOD.watchdogEnable(int(self.config.get('WATCHDOG_PERIOD')))
+        MOD.watchdogEnable(int(self.config.get(WATCHDOG_PERIOD)))
 
     # Сбрасывает охранный таймер
     def resetWatchdog(self):
@@ -255,7 +259,7 @@ class DirectWorker:
         res = []
         for item in line.split(","):
             dev = DeviceInfo(int(item))
-            dev.onConnectionTimeout = MOD.secCounter() + CONNECTION_TIMEOUT
+            dev.onConnectionTimeout = MOD.secCounter() + int(self.config.get(CONNECTION_TIMEOUT))
             res.append(dev)
         
         return res
@@ -307,7 +311,7 @@ class DirectWorker:
     def sendToRecepients(self, text):
         for recepient in self.recepients:
             self.debug.send("SEND ALARM TO RECEPIENTS")
-            self.smsManager.sendSms(recepient, CONNECTED_TEXT)            
+            self.smsManager.sendSms(recepient, text)
             #self.debug.send(text)
 
     # Обрабатывает SMS с командой
@@ -322,11 +326,16 @@ class DirectWorker:
         recepients = []
         for sms in allSms:
             for recep in self.recepients:
-                if sms.recepient == recep:
-                    recepients.append(recep)
+                smsRec = sms.recepient.replace("+7", "8")
+                storRec = recep.replace("+7", "8")
+                self.debug.send("SMS recepient: " + smsRec)
+                self.debug.send("Stored recepient: " + storRec)
+                if smsRec == storRec:
+                    recepients.append(storRec)
         
-        self.debug.send(str(recepients))
+        self.debug.send("Recepients: " + str(recepients))
         count = len(self.alarmStorage.alarms)
+        self.debug.send("Alarm count: " + str(count))
         txt = ""
         # Клапан или открыт или закрыт
         if count == 0:
@@ -362,16 +371,16 @@ class DirectWorker:
         self.debug.send("Check connection")
         self.debug.send(str(len(states)))
 
-        for network in states.keys():
+        for dev in self.devices:
             found = core.FALSE
-            for dev in self.devices:
+            for network in states.keys():                
                 if network == dev.network:
                     found = core.TRUE
                     break
-                        
-            dev.connected = found
+                                    
             if found == core.TRUE:
-                dev.onConnectionTimeout = MOD.secCounter() + CONNECTION_TIMEOUT
+                dev.connected = core.TRUE
+                dev.onConnectionTimeout = MOD.secCounter() + int(self.config.get(CONNECTION_TIMEOUT))
             else:
                 # Таймаут превышен
                 if MOD.secCounter() >= dev.onConnectionTimeout:
@@ -408,6 +417,7 @@ class DirectWorker:
 
     # Запускает
     def start(self):
+        self.debug.send("Start")
         # Отсылает 10 раз 2 байта переинициализации        
         for i in xrange(10):
             self.serial.sendbyte(0, self.speed, '8M1')
@@ -430,23 +440,24 @@ class DirectWorker:
 
     # Основная работа
     def work(self):
-        # self.debug.send("Start work")
+        self.debug.send("Start work")
         while(core.TRUE):
-        #for x in xrange(1, 3):
             # Отсылает запрос состояния каждому газоанализатору
             states = self.readStates(self.devices)
             # Проверяет есть ли связь. Отсылает SMS если не было связи в течении 3-х минут
             # Или отсылает SMS что связь появилась
             self.checkConnection(states)
 
-            self.debug.send("STATES COUNT: " + str(len(states)))
-            for item in states.items():
-                self.debug.send(str(item))
-                alarms = self.processState(item)
-                self.debug.send("ALARMS COUNT: " + str(len(alarms)))
-                for alarm in alarms:
-                    txt = str(alarm.code) + " - " + alarm.text
-                    self.sendToRecepients(txt)
+            # Пока состояние неизвестно не отсылает ничего
+            if self.globalConnected != None:
+                self.debug.send("STATES COUNT: " + str(len(states)))
+                for item in states.items():
+                    self.debug.send(str(item))
+                    alarms = self.processState(item)
+                    self.debug.send("ALARMS COUNT: " + str(len(alarms)))
+                    for alarm in alarms:
+                        txt = str(alarm.code) + " - " + alarm.text
+                        self.sendToRecepients(txt)
 
             # Получает СМС и отправляет последнее состояние
             self.processSms()
@@ -487,7 +498,7 @@ class BupsWorker:
         data = []
         byte = 0
         while core.True:
-            byte = self.serial.receivebyte(self.speed, "8E1")
+            byte = self.serial.receivebyte(self.speed, "8N1")
             if byte == -1:
                 break
 
