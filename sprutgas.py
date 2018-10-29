@@ -224,6 +224,9 @@ class DirectWorker:
 
         self.smsManager = core.SmsManager(self.gsm, self.debug)
         self.smsManager.initContext()
+        self.smsReadTimer = 0
+        self.resetSmsTimer()
+
         self.alarmParser = AlarmParser()
         self.alarmStorage = AlarmStorage()        
         self.recepientHelper = RecepientHelper(self.config, self.gsm, self.debug)
@@ -234,13 +237,17 @@ class DirectWorker:
         self.devices = []
         self.initWatchdog()
 
+    # Сбрасывает таймер чтения СМС
+    def resetSmsTimer(self):
+        self.smsReadTimer = MOD.secCounter() + int(self.config.get('SMS_READ_PERIOD'))
+
     # Инициализирует охранный таймер
     def initWatchdog(self):
         MOD.watchdogEnable(int(self.config.get('WATCHDOG_PERIOD')))
 
     # Сбрасывает охранный таймер
     def resetWatchdog(self):
-        MOD.watchdogReset()
+        MOD.watchdogReset()        
 
     # Возвращает устройства из файла настроек
     def getDevices(self):
@@ -306,6 +313,11 @@ class DirectWorker:
     # Обрабатывает SMS с командой
     def processSms(self):
         self.debug.send("Process SMS")
+
+        if MOD.secCounter() < self.smsReadTimer:
+            self.debug.send("Wait for SMS read")
+            return
+
         allSms = self.smsManager.listSms()
         recepients = []
         for sms in allSms:
@@ -342,6 +354,7 @@ class DirectWorker:
             self.smsManager.sendSms(rec, txt)
 
         self.smsManager.deleteAll()
+        self.resetSmsTimer()
 
     # Проверяет есть ли связь. Отсылает SMS если не было связи в течении 3-х минут
     # Или отсылает SMS что связь появилась
