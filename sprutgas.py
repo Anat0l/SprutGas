@@ -112,7 +112,7 @@ class AlarmStorage:
     def __init__(self):
         self.alarms = {}
 
-    # Сравнивает
+    # Добавляет тревогу и возвращает её если она новая
     def add(self, alarms):
         res = []  # Снятые тревоги
         # Ищет снятые тревоги
@@ -488,7 +488,7 @@ class BupsWorker:
         self.resetSmsTimer()
 
         self.alarmParser = AlarmParser()
-        self.alarmZero = AlarmStorage()
+        self.alarmOne = AlarmStorage()
         self.alarmTwo = AlarmStorage()
         self.alarmFour = AlarmStorage()
         self.recepientHelper = RecepientHelper(self.config, self.gsm, self.debug)
@@ -511,8 +511,24 @@ class BupsWorker:
         MOD.watchdogReset()    
 
     # Обрабатывает пакет БУПС
-    def processState(self, data):
-        return [Alarm(1, "")]
+    # idx - номер байта
+    # code - код тревоги
+    # возвращает список тревог
+    def processState(self, idx, code):
+        total = []
+        if idx == BUPS_BYTE_1:
+            alarms = self.alarmParser.parseOne(code)
+            for alarm in self.alarmOne.add(alarms):
+                total.append(alarm)
+        if idx == BUPS_BYTE_2:
+            alarms = self.alarmParser.parseTwo(code)
+            for alarm in self.alarmTwo.add(alarms):
+                total.append(alarm)
+        if idx == BUPS_BYTE_4:
+            alarms = self.alarmParser.parseFour(code)
+            for alarm in self.alarmFour.add(alarms):
+                total.append(alarm)
+        return total
 
     # Отправляет всем
     def sendToRecepients(self, text):
@@ -520,6 +536,17 @@ class BupsWorker:
             self.debug.send("SEND ALARM TO RECEPIENTS")
             self.smsManager.sendSms(recepient, text)
             #self.debug.send(text)
+
+    # Возвращает все тревоги
+    def getTotalAlarms(self):
+        total = []
+        for alarm in self.alarmOne.alarms.values():
+            total.append(alarm)
+        for alarm in self.alarmTwo.alarms.values():
+            total.append(alarm)
+        for alarm in self.alarmFour.alarms.values():
+            total.append(alarm)
+        return total
 
     # Обрабатывает SMS с командой
     def processSms(self):
@@ -540,21 +567,20 @@ class BupsWorker:
                 if smsRec == storRec:
                     recepients.append(storRec)
         
-        self.debug.send("Recepients: " + str(recepients))
-        # TODO: собрать всё описание тревог
-        count = len(self.alarmStorage.alarms)
+        self.debug.send("Recepients: " + str(recepients))        
+        totalAlarms = self.getTotalAlarms()
+        count = len(totalAlarms)
         self.debug.send("Alarm count: " + str(count))
         txt = ""
         # Клапан или открыт или закрыт
         if count == 0:
             txt = "Состояние неизвестно"
         elif count == 1:
-            alarm = self.alarmStorage.alarms.items()[0][1]
+            alarm = totalAlarms[0]
             txt = "Аварий нет. " + alarm.text
         else:
             clapanIsOpen = core.FALSE
-            for item in self.alarmStorage.alarms.items():
-                alarm = item[1]
+            for alarm in totalAlarms:
                 if alarm.code == CLAPAN_OPENED:
                     clapanIsOpen = core.TRUE
                 elif alarm.code == CLAPAN_CLOSED:
@@ -565,7 +591,7 @@ class BupsWorker:
             if clapanIsOpen == core.TRUE:
                 txt = txt + "Клапан открыт"
             else:
-                txt = txt + "Клапан закрыт"                    
+                txt = txt + "Клапан закрыт"
 
         for rec in recepients:
             self.smsManager.sendSms(rec, txt)
@@ -577,28 +603,11 @@ class BupsWorker:
     # Или отсылает SMS что связь появилась
     def checkConnection(self, states):
         self.debug.send("Check connection")
-        self.debug.send(str(len(states)))
+        self.debug.send(str(len(states)))        
 
-        for dev in self.devices:
-            found = core.FALSE
-            for network in states.keys():                
-                if network == dev.network:
-                    found = core.TRUE
-                    break
-                                    
-            if found == core.TRUE:
-                dev.connected = core.TRUE
-                dev.onConnectionTimeout = MOD.secCounter() + int(self.config.get(CONNECTION_TIMEOUT))
-            else:
-                # Таймаут превышен
-                if MOD.secCounter() >= dev.onConnectionTimeout:
-                    dev.connected = core.FALSE
-
-        connected = core.TRUE
-        for dev in self.devices:
-            if dev.connected == core.FALSE:
-                connected = core.FALSE
-                break
+        connected = core.FALSE
+        if len(states) > 0:
+            connected = core.TRUE
 
         self.debug.send("Connected: " + str(connected))
         self.debug.send("Global Connected: " + str(self.globalConnected))
@@ -623,8 +632,8 @@ class BupsWorker:
                 self.sendToRecepients(CONNECTED_TEXT)
                 self.globalConnected = core.TRUE
 
-    # Читает байты
-    def readBups(self):
+    # Читает четыре байта состояний
+    def readStates(self):
         count = 0
         data = []
         byte = 0
@@ -634,6 +643,9 @@ class BupsWorker:
                 break
 
             count = count + 1
+            if byte == BUPS_NETWORK:
+                continue
+
             data.append(byte)
             if count >= 8:
                 break
@@ -647,6 +659,28 @@ class BupsWorker:
 
     # Основная работа
     def work(self):
+        self.debug.send("Start work")
+        while(core.TRUE):
+            # Отсылает запрос состояния каждому газоанализатору
+            states = self.readStates(self.devices)
+            self.checkConnection(states)
+
+            # Пока состояние неизвестно не отсылает ничего
+            if self.globalConnected != None:
+                self.debug.send("STATES COUNT: " + str(len(states)))
+                for item in states.items():
+                    self.debug.send(str(item))
+                    alarms = self.processState(item)
+                    self.debug.send("ALARMS COUNT: " + str(len(alarms)))
+                    for alarm in alarms:
+                        txt = str(alarm.code) + " - " + alarm.text
+                        self.sendToRecepients(txt)
+
+            # Получает СМС и отправляет последнее состояние
+            self.processSms()
+            # Сбрасывает охранный таймер
+            self.resetWatchdog()
+
         while(core.TRUE):
             # Читает из порта пакеты БУПС
             resp = self.serial.receivebyte(self.speed, "8E1")
