@@ -201,33 +201,10 @@ class Serial:
             self.lastBt = bt
             self.lastSpeed = speed            
 
-    # Возвращает буффер
-    def getBuffer(self, size):
-        data = ''
-        if(len(self.buffer) > size):
-            data = self.buffer[0:size]
-            self.buffer = self.buffer[size:]
-        else:
-            data = self.buffer
-            self.buffer = ''
-        return data
-
-    # Получить данные из порта
-    def receive(self, size):
-        data = ''
-        while(1):
-            rcv = SER.read()
-            if(len(rcv) > 0):
-                self.buffer = self.buffer + rcv
-                if(len(self.buffer) > size):
-                    break
-            else:
-                break
-
-        if(len(self.buffer) > 0):
-            data = self.getBuffer(size)
-
-        return data
+    # Возвращает массив данных, полученных в течении времени(timeout)
+    def receive(self, speed, bt, timeout = 1):
+        self.open(speed, bt)
+        return SER.receive(timeout)
 
     # Считывает один байт пока не придут данные
     def receivebyte(self, speed, bt):

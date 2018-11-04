@@ -42,7 +42,10 @@ MAX_ADDRESS = 255
 # Таймаут чтения
 READ_TIMEOUT = 1
 # Таймаут чтения БУПС
-READ_BUPS_TIMEOUT = 2
+READ_BUPS_TIMEOUT = 1
+# Количество байт в пакете от БУПС
+BUPS_PACK_SIZE = 8
+
 # Таймаут ожидания запуска после рестарта
 REBOOT_WAIT_TIMEOUT = 100
 
@@ -490,6 +493,7 @@ class BupsWorker:
 
         self.speed = config.get(SER_SP)
         self.serial = core.Serial()
+        self.buffer = ""    # Буффер для данных от БУПС
 
         isDebug = config.get(DEBUG_SER) == "1"
         debugSpeed = config.get(DEBUG_SER_SP)
@@ -532,20 +536,21 @@ class BupsWorker:
     # idx - номер байта
     # code - код тревоги
     # возвращает список тревог
-    def processState(self, bupsState):
+    def processStates(self, bupsStates):
         total = []
-        
-        alarms = self.alarmParser.parseOne(bupsState.one)
-        for alarm in self.alarmOne.add(alarms):
-            total.append(alarm)
-        
-        alarms = self.alarmParser.parseTwo(bupsState.two)
-        for alarm in self.alarmTwo.add(alarms):
-            total.append(alarm)
-        
-        alarms = self.alarmParser.parseFour(bupsState.four)
-        for alarm in self.alarmFour.add(alarms):
-            total.append(alarm)
+
+        for bupsState in bupsStates:
+            alarms = self.alarmParser.parseOne(bupsState.one)
+            for alarm in self.alarmOne.add(alarms):
+                total.append(alarm)
+            
+            alarms = self.alarmParser.parseTwo(bupsState.two)
+            for alarm in self.alarmTwo.add(alarms):
+                total.append(alarm)
+            
+            alarms = self.alarmParser.parseFour(bupsState.four)
+            for alarm in self.alarmFour.add(alarms):
+                total.append(alarm)
 
         return total
 
@@ -620,12 +625,11 @@ class BupsWorker:
 
     # Проверяет есть ли связь. Отсылает SMS если не было связи в течении 3-х минут
     # Или отсылает SMS что связь появилась
-    def checkConnection(self, bupsState):
+    def checkConnection(self, bupsStates):
         self.debug.send("Check connection")
-        self.debug.send(str(bupsState))
 
         connected = core.FALSE
-        if bupsState != None:
+        if bupsStates != None:
             connected = core.TRUE
 
         self.debug.send("Connected: " + str(connected))
@@ -652,37 +656,43 @@ class BupsWorker:
                 self.globalConnected = core.TRUE
 
     # Читает четыре байта состояний
-    def readBupsState(self):
+    def readBupsStates(self):
         self.debug.send("Read bups state")
+        
+        self.buffer = self.buffer + self.serial.receive(self.speed, "8N1", READ_BUPS_TIMEOUT)
+        parts = len(self.buffer) / BUPS_PACK_SIZE
+        if parts < 1:
+            return None
+       
+        size = parts * 8
+        self.debug.send("Start buffer size: " + str(size))
 
         data = []
-        byte = 0
         state = 0 # состояние: адрес(0) или тревога(1)
-        timeout = MOD.secCounter() + READ_BUPS_TIMEOUT
-        while(core.TRUE):
-            byte = self.serial.receivebyte(self.speed, "8N1", 0)
-            if byte == -1:
-                break
 
-            if byte == BUPS_NETWORK:
-                state = 1
-                continue            
+        pos = 0
+        states = []
+        while(pos < size):
+            byte = self.buffer[pos]
+            pos = pos + 1
+            # if byte == BUPS_NETWORK:
+            #      state = 1
+            #      continue
             
-            if state == 1:
-                timeout = MOD.secCounter() + READ_TIMEOUT
-                state = 0
-                data.append(byte)
-                if len(data) >= 4:
-                    break
-            
-            if MOD.secCounter() > timeout:
-                break
+            # if state == 1:
+            #     state = 0
+            #     data.append(byte)
+            #     if len(data) >= 4:
+            #         state = BupsAlarmState(data[0], data[1], data[2], data[3])
+            #         states.append(state)
+            #         data = []
+                
+        self.buffer = self.buffer[size:]
+        self.debug.send("End buffer size: " + str(len(self.buffer)))
+        if (len(states) > 0):
+            return states
 
-        self.debug.send(str(data))
-        if len(data) == 4:
-            return BupsAlarmState(data[0], data[1], data[2], data[3])
-        else:
-            return None
+        return None
 
     # Запускает
     def start(self):
@@ -694,14 +704,14 @@ class BupsWorker:
     def work(self):
         self.debug.send("Start work")
         #while(core.TRUE):
-        for i in xrange(1, 100):            
+        for i in xrange(1, 10):            
             # Отсылает запрос состояния каждому газоанализатору
-            bupsState = self.readBupsState()
-            self.checkConnection(bupsState)
+            bupsStates = self.readBupsStates()
+            self.checkConnection(bupsStates)
             
             # Пока состояние неизвестно не отсылает ничего
-            if (bupsState != None) and (self.globalConnected != None):
-                alarms = self.processState(bupsState)
+            if (bupsStates != None) and (self.globalConnected != None):
+                alarms = self.processStates(bupsStates)
                 self.debug.send("ALARMS COUNT: " + str(len(alarms)))
                 for alarm in alarms:
                     txt = str(alarm.code) + " - " + alarm.text
@@ -711,18 +721,6 @@ class BupsWorker:
             self.processSms()
             # Сбрасывает охранный таймер
             self.resetWatchdog()
-
-        while(core.TRUE):
-            # Читает из порта пакеты БУПС
-            resp = self.serial.receivebyte(self.speed, "8E1")
-            if resp != -1:
-                alarms = self.processState(resp)
-                # Отсылает СМС адресату
-                for alarm in alarms:
-                    txt = str(alarm.code) + " - " + alarm.text
-                    self.smsManager.sendSms(recepient, txt)
-
-            MOD.sleep(WORK_DELAY)
 
 # Обеспечивает работу в режиме приема СМС и передачи на пульт
 class SmsRecieveWorker:
