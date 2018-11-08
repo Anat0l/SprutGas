@@ -110,17 +110,18 @@ class RecepientHelper:
     # Возвращает список кому отправить SMS в зависимости от настроек
     def getRecepients(self):
         # Переключается на СИМ карту
-        self.gsm.sendATMdmDefault("AT+CPBS=SM\n", "OK")        
+        self.gsm.sendATMdmDefault("AT+CPBS=SM\r", "OK")        
         sendMode = self.config.get(SEND_MODE)
 
         # Читает 10 номеров из телефона
         a, s = self.gsm.sendATMdmDefault("AT+CPBR=1,10\r", "OK")        
-        phoneItems = s.split("\n")
+        phoneItems = s.split("+CPBR: ")
+        self.debug.send(str(phoneItems))
 
         phones = []
         for item in phoneItems:
             its = item.split(",")
-            if (len(its) == 2):
+            if (len(its) > 3):
                 val = its[1].strip()
                 if len(val) > 0:
                     phones.append(val)
@@ -199,15 +200,15 @@ class AlarmParser:
     # Парсит тревоги из второго байта бупс
     def parseTwo(self, code):
         alarms = []
-        if (code & 0x81 > 0):
+        if (code & 0x01 > 0):
             alarms.append(Alarm(20, "Постановка на охрану"))
-        if (code & 0x82 > 0):
+        if (code & 0x02 > 0):
             alarms.append(Alarm(21, "Взлом"))
-        if (code & 0x84 > 0):
+        if (code & 0x04 > 0):
             alarms.append(Alarm(22, "Пожар"))
-        if (code & 0x88 > 0):
+        if (code & 0x08 > 0):
             alarms.append(Alarm(23, "Авария 1"))
-        if (code & 0x90 > 0):
+        if (code & 0x10 > 0):
             alarms.append(Alarm(24, "Авария 2"))
         
         return alarms
@@ -220,15 +221,15 @@ class AlarmParser:
     # Парсит тревоги из четвёртого байта бупс
     def parseFour(self, code):
         alarms = []
-        if (code & 0xC1 > 0):
+        if (code & 0x01 > 0):
             alarms.append(Alarm(40, "Авария 8"))
-        if (code & 0xC2 > 0):
+        if (code & 0x02 > 0):
             alarms.append(Alarm(41, "Авария 9"))
-        if (code & 0xC4 > 0):
+        if (code & 0x04 > 0):
             alarms.append(Alarm(42, "Авария 10"))
-        if (code & 0xC8 > 0):
+        if (code & 0x08 > 0):
             alarms.append(Alarm(43, "Авария 11"))
-        if (code & 0xD0 > 0):
+        if (code & 0x10 > 0):
             alarms.append(Alarm(44, "Авария 12"))
         
         return alarms
@@ -560,8 +561,8 @@ class BupsWorker:
     def sendToRecepients(self, text):
         for recepient in self.recepients:
             self.debug.send("SEND ALARM TO RECEPIENTS")
-            #self.smsManager.sendSms(recepient, text)
-            self.debug.send(text)
+            self.smsManager.sendSms(recepient, text)
+            #self.debug.send(text)
 
     # Возвращает все тревоги
     def getTotalAlarms(self):
@@ -668,7 +669,6 @@ class BupsWorker:
         bupState = None
         while (timeout > MOD.secCounter()):
             byte = self.serial.receivebyte(self.speed, '8N1', 0)
-            self.debug.send(str(byte))
             # Ищет начало пакета
             if state == 0:
                 if (byte == BUPS_NETWORK):
@@ -677,7 +677,7 @@ class BupsWorker:
 
             # Если 7 бит у байта тревоги снят то это начало
             if state == 1:
-                if (byte & 0x80) == 0:
+                if ((byte & 0x80) > 0) and ((byte & 0x40) == 0) and ((byte & 0x20) == 0):
                     state = 2
                     data.append(byte)
                 else:
@@ -694,7 +694,7 @@ class BupsWorker:
                 state = 2
                 data.append(byte)
                 if len(data) >= 4:
-                    bupState = BupsAlarmState(data[0], data[1], data[2], data[3])
+                    bupState = BupsAlarmState(data[3], data[0], data[1], data[2])
                     break
 
         # Очищает буффер модема, что бы не переполнился
@@ -714,8 +714,8 @@ class BupsWorker:
     # Основная работа
     def work(self):
         self.debug.send("Start work")
-        #while(core.TRUE):
-        for i in xrange(1, 2):            
+        while(core.TRUE):
+        #for i in xrange(1, 2):            
             # Отсылает запрос состояния каждому газоанализатору
             bupsState = self.readBupsState()
             self.checkConnection(bupsState)
