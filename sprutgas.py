@@ -234,6 +234,62 @@ class AlarmParser:
         
         return alarms
 
+    # Преобразует тревоги в массив байт тревог
+    def encodeAlarmsToBups(self, alarms):
+        one = 0
+        two = 0x80
+        three = 0xA0
+        four = 0xC0
+        for alarm in alarms:
+            # Второй порог СН4
+            if alarm.code == 1:
+                one = one or 0x41
+            # Второй порог СО
+            if alarm.code == 2:                
+                one = one or 0x01
+            # Неисправность
+            if alarm.code == 3:
+                one = one or 0x04
+            # Первый порог СН4
+            if alarm.code == 4:
+                one = one or 0x02
+            # Первый порог СО
+            if alarm.code == 5:
+                one = one or 0x08
+            # Первый порог СН4
+            if alarm.code == 6:
+                one = one or 0x48
+            # Первый порог СО
+            if alarm.code == 7:
+                one = one or 0x44
+            # Клапан закрыт
+            if alarm.code == 9:
+                one = one or 0x10
+
+            if alarm.code == 20:
+                two = two or 0x01
+            if alarm.code == 21:
+                two = two or 0x02
+            if alarm.code == 22:
+                two = two or 0x04
+            if alarm.code == 23:
+                two = two or 0x08
+            if alarm.code == 24:
+                two = two or 0x10
+            
+            if alarm.code == 40:
+                four = four or 0x01
+            if alarm.code == 41:
+                four = four or 0x02
+            if alarm.code == 42:
+                four = four or 0x04
+            if alarm.code == 43:
+                four = four or 0x08
+            if alarm.code == 44:
+                four = four or 0x10
+            
+        return [one, two, three, four]
+
 # Обеспечивает работу в режиме опроса газовых анализаторов
 class DirectWorker:
     # Конструктор
@@ -738,37 +794,93 @@ class SmsRecieveWorker:
     # Конструктор
     def __init__(self, config):
         self.config = config
-        self.serial = core.Serial(config.get(SER_SP))
-        self.serial.open()
-        self.debug = core.Debug(config.get(DEBUG_SER) == "1", self.serial)
+
+        self.speed = config.get(SER_SP)
+        self.serial = core.Serial()        
+
+        isDebug = config.get(DEBUG_SER) == "1"
+        debugSpeed = config.get(DEBUG_SER_SP)
+        debugBytetype = config.get(DEBUG_SER_OD)
+        self.debug = core.Debug(isDebug, self.serial,
+                                debugSpeed, debugBytetype)
+        
         self.gsm = core.Gsm(config, self.serial, self.debug)
+        self.gsm.simpleInit()
+        
+        self.recepientHelper = RecepientHelper(self.config, self.gsm, self.debug)
+        # Хранилище для тревог
+        self.alarms = {}
+        self.alarmParser = AlarmParser()
+
         self.smsManager = core.SmsManager(self.gsm, self.debug)
+        self.smsManager.initContext()
+        self.smsReadTimer = 0
+        self.resetSmsTimer()
+                
+        self.initWatchdog()
+
+     # Сбрасывает таймер чтения СМС
+    def resetSmsTimer(self):
+        self.smsReadTimer = MOD.secCounter() + int(self.config.get(SMS_READ_PERIOD))
+
+    # Инициализирует охранный таймер
+    def initWatchdog(self):
+        MOD.watchdogEnable(int(self.config.get(WATCHDOG_PERIOD)))
+
+    # Сбрасывает охранный таймер
+    def resetWatchdog(self):
+        MOD.watchdogReset()
 
     # Запускает
     def start(self):
+        self.recepients = self.recepientHelper.getRecepients()
         self.work()
 
     # Обрабатывает SMS и возвращает описание тревоги
     def processSms(self, sms):
-        return Alarm(1, "")
+        items = sms.text.split("-")
+        if (len(items) < 2):
+            return None
 
-    # Отправляет тревогу
-    def sendAlarm(self, alarm):
-        self.serial.send("\0\0\0\0\0\0\0")
+        codeStr = items[0].strip()
+        try:
+            code = int(codeStr)
+            self.alarms[code] = core.TRUE
+        except:
+            return None
+
+    # Отправляет тревоги на пульт
+    def sendAlarms(self, alarm):
+        alarms = self.alarmParser.encodeAlarmsToBups(self.alarms.keys())
+
+        # DATA2, DATA3, DATA4, DATA0
+        self.serial.sendbyte(self.speed, "8M1", BUPS_NETWORK)
+        self.serial.sendbyte(self.speed, "8N1", alarms[2])
+        self.serial.sendbyte(self.speed, "8M1", BUPS_NETWORK)
+        self.serial.sendbyte(self.speed, "8N1", alarms[3])
+        self.serial.sendbyte(self.speed, "8M1", BUPS_NETWORK)
+        self.serial.sendbyte(self.speed, "8N1", alarms[4])
+        self.serial.sendbyte(self.speed, "8M1", BUPS_NETWORK)
+        self.serial.sendbyte(self.speed, "8N1", alarms[0])
 
     # Основная работа
     def work(self):
         while(core.TRUE):
             # Ожидает SMS
-            smsList = self.smsManager.listSms()
-            for sms in smsList:
-                alarm = self.processSms(sms)
-                if alarm != None:
-                    # Отсылает 4 байта с тревогами на пульт(адрес пульта в INI)
-                    self.sendAlarm(alarm)
+            if MOD.secCounter() > self.smsReadTimer:
+                smsList = self.smsManager.listSms()
+                for sms in smsList:
+                    for recepient in self.recepients:
+                        smsRec = sms.recepient.replace("+7", "8")
+                        if smsRec == recepient:
+                            self.processSms(sms)
 
-            self.smsManager.deleteAll()
-            MOD.sleep(WORK_DELAY)
+                self.smsManager.deleteAll()
+                self.resetSmsTimer()
+            
+            # Отсылает 4 байта с тревогами на пульт(адрес пульта в INI)
+            self.sendAlarms()
+            self.resetWatchdog()
 
 
 try:
