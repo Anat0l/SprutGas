@@ -122,7 +122,7 @@ class RecepientHelper:
         for item in phoneItems:
             its = item.split(",")
             if (len(its) > 3):
-                val = its[1].strip()
+                val = its[1].strip().replace('"', '')
                 if len(val) > 0:
                     phones.append(val)
 
@@ -834,6 +834,7 @@ class SmsRecieveWorker:
     # Запускает
     def start(self):
         self.recepients = self.recepientHelper.getRecepients()
+        self.debug.send(str(self.recepients))
         self.work()
 
     # Обрабатывает SMS и возвращает описание тревоги
@@ -850,29 +851,37 @@ class SmsRecieveWorker:
             return None
 
     # Отправляет тревоги на пульт
-    def sendAlarms(self, alarm):
+    def sendAlarms(self):
+        self.debug.send("Send alarms")
         alarms = self.alarmParser.encodeAlarmsToBups(self.alarms.keys())
+        self.debug.send(str(alarms))
 
         # DATA2, DATA3, DATA4, DATA0
-        self.serial.sendbyte(self.speed, "8M1", BUPS_NETWORK)
-        self.serial.sendbyte(self.speed, "8N1", alarms[2])
-        self.serial.sendbyte(self.speed, "8M1", BUPS_NETWORK)
-        self.serial.sendbyte(self.speed, "8N1", alarms[3])
-        self.serial.sendbyte(self.speed, "8M1", BUPS_NETWORK)
-        self.serial.sendbyte(self.speed, "8N1", alarms[4])
-        self.serial.sendbyte(self.speed, "8M1", BUPS_NETWORK)
-        self.serial.sendbyte(self.speed, "8N1", alarms[0])
+        self.serial.sendbyte(BUPS_NETWORK, self.speed, "8M1")
+        self.serial.sendbyte(alarms[1], self.speed, "8N1")
+        self.serial.sendbyte(BUPS_NETWORK, self.speed, "8M1")
+        self.serial.sendbyte(alarms[2], self.speed, "8N1")
+        self.serial.sendbyte(BUPS_NETWORK, self.speed, "8M1")
+        self.serial.sendbyte(alarms[3], self.speed, "8N1")
+        self.serial.sendbyte(BUPS_NETWORK, self.speed, "8M1")
+        self.serial.sendbyte(alarms[0], self.speed, "8N1")
+
+        self.debug.send("Send alarms complete")
 
     # Основная работа
     def work(self):
-        while(core.TRUE):
+        self.debug.send("Start work")
+        for i in xrange(1, 10):
+        #while(core.TRUE):
             # Ожидает SMS
             if MOD.secCounter() > self.smsReadTimer:
+                self.debug.send("Get sms")
                 smsList = self.smsManager.listSms()
                 for sms in smsList:
                     for recepient in self.recepients:
                         smsRec = sms.recepient.replace("+7", "8")
-                        if smsRec == recepient:
+                        rec = recepient.replace("+7", "8")
+                        if smsRec == rec:
                             self.processSms(sms)
 
                 self.smsManager.deleteAll()
@@ -881,7 +890,6 @@ class SmsRecieveWorker:
             # Отсылает 4 байта с тревогами на пульт(адрес пульта в INI)
             self.sendAlarms()
             self.resetWatchdog()
-
 
 try:
     settings = core.IniFile("settings.ini")
