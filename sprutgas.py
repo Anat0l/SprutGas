@@ -237,6 +237,7 @@ class AlarmParser:
     # Преобразует тревоги в массив байт тревог
     def encodeAlarmsToBups(self, alarms):
         one = 0
+        #one = 0x10
         two = 0x80
         three = 0xA0
         four = 0xC0
@@ -833,6 +834,14 @@ class SmsRecieveWorker:
 
     # Запускает
     def start(self):
+        # Отсылает 10 раз 2 байта переинициализации
+        self.debug.send("Start")
+        for i in xrange(10):
+            self.serial.sendbyte(0, self.speed, '8M1')
+            self.serial.sendbyte(0, self.speed, '8E1')
+
+        MOD.sleep(REBOOT_WAIT_TIMEOUT)
+
         self.recepients = self.recepientHelper.getRecepients()
         self.debug.send(str(self.recepients))
         self.work()
@@ -850,28 +859,35 @@ class SmsRecieveWorker:
         except:
             return None
 
+    # Отправляет тревогу с учётом чётности байта
+    def sendAlarm(self, byte):
+        if core.isOdd(byte) == core.TRUE:
+            self.serial.sendbyte(byte, self.speed, "8O1")
+        else:
+            self.serial.sendbyte(byte, self.speed, "8E1")
+
     # Отправляет тревоги на пульт
     def sendAlarms(self):
         self.debug.send("Send alarms")
         alarms = self.alarmParser.encodeAlarmsToBups(self.alarms.keys())
         self.debug.send(str(alarms))
 
-        # DATA2, DATA3, DATA4, DATA0
+        # DATA2, DATA3, DATA4, DATA0        
         self.serial.sendbyte(BUPS_NETWORK, self.speed, "8M1")
-        self.serial.sendbyte(alarms[1], self.speed, "8N1")
+        self.sendAlarm(alarms[1])            
         self.serial.sendbyte(BUPS_NETWORK, self.speed, "8M1")
-        self.serial.sendbyte(alarms[2], self.speed, "8N1")
+        self.sendAlarm(alarms[2])            
         self.serial.sendbyte(BUPS_NETWORK, self.speed, "8M1")
-        self.serial.sendbyte(alarms[3], self.speed, "8N1")
+        self.sendAlarm(alarms[3])
         self.serial.sendbyte(BUPS_NETWORK, self.speed, "8M1")
-        self.serial.sendbyte(alarms[0], self.speed, "8N1")
+        self.sendAlarm(alarms[0])
 
         self.debug.send("Send alarms complete")
 
     # Основная работа
     def work(self):
         self.debug.send("Start work")
-        for i in xrange(1, 10):
+        for i in xrange(1, 20):
         #while(core.TRUE):
             # Ожидает SMS
             if MOD.secCounter() > self.smsReadTimer:

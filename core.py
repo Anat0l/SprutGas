@@ -10,7 +10,7 @@ FALSE = 0
 # Максимальная длина принимаемого сообщения
 MAX_DATA_LENGTH = 1500
 
-SYMBOLS = { 
+SYMBOLS = {
     "D090": 1040, "D091": 1041, "D092": 1042, "D093": 1043, "D094": 1044, "D095": 1045,
     "D081": 1025, "D096": 1046, "D097": 1047, "D098": 1048, "D099": 1049, "D09A": 1050,
     "D09B": 1051, "D09C": 1052, "D09D": 1053, "D09E": 1054, "D09F": 1055, "D0A0": 1056,
@@ -24,34 +24,64 @@ SYMBOLS = {
     "D18A": 1098, "D18B": 1099, "D18C": 1100, "D18D": 1101, "D18E": 1102, "D18F": 1103
 }
 
+# Возвращает количество бит в числе
+# По умолчанию возвращает для байта
+def getBitCount(number, count=8):
+    res = 0
+    for i in xrange(0, count):
+        if (number & pow(2, i)) > 0:
+            res = res + 1
+    return res
+
+# Проверяет является ли число не чётным
+def isOdd(byte):
+    count = getBitCount(byte)
+    if (count % 2 > 0):
+        return TRUE
+    return FALSE
+
 # Кодирует в UCS-2
 def encodeUcs2(text):
     s = ''
     i = 0
-    while i < len(text):        
+    while i < len(text):
         c = ord(text[i])
         if c > 128:
             c2 = ord(text[i + 1])
             cod = ('%02X' % c) + ('%02X' % c2)
             # print(cod)
             c = SYMBOLS[cod]
-            i = i + 1        
+            i = i + 1
 
         s = s + '%04X' % c
-        i = i + 1                            
+        i = i + 1
 
     return s
+
+# Декодирует из UCS-2
+def decodeUcs2(text):
+    count = len(text) / 4
+    res = []
+    for i in xrange(0, count):
+        pos = i * 4
+        first = int(text[pos] + text[pos + 1], 16)
+        second = int(text[pos + 2] + text[pos + 3], 16)
+        full = (first << 8) + second
+        if first == 0:
+            res.append(chr(second))
+
+    return "".join(res)
 
 # Данные INI файла
 # Разделитель ::
 # Значения ключа хранятся в виде массива
 class IniData:
     # data - строка INI файла
-    def __init__(self, data = None):
-        self.iniData = {}        
+    def __init__(self, data=None):
+        self.iniData = {}
 
         if data != None:
-            lines = data.split("\n")            
+            lines = data.split("\n")
             for l in lines:
                 kv = l.strip().split('::')
                 key = kv[0].strip()
@@ -63,13 +93,13 @@ class IniData:
                     vals.append(it.strip())
 
                 self.iniData[key] = vals
-    
+
     # Возвращает есть ли значение по ключу
     def exists(self, k):
         return self.iniData.has_key(k)
 
     # Получает значение элемента из массива по ключу и индексу массива
-    def get(self, k, idx = 0):
+    def get(self, k, idx=0):
         return self.iniData[k][idx]
 
     # Возвращает массив значений по ключу
@@ -77,7 +107,7 @@ class IniData:
         return self.iniData[k]
 
     # Устанавливает значение элемента по ключу и индексу массива
-    def set(self, k, v, idx = 0):
+    def set(self, k, v, idx=0):
         vals = []
         if self.iniData.has_key(k):
             vals = self.iniData[k]
@@ -86,10 +116,10 @@ class IniData:
 
         ln = idx + 1
         if ln >= len(vals):
-            cnt = ln - len(vals)            
+            cnt = ln - len(vals)
             for i in xrange(cnt):
                 vals.append('')
-                
+
         vals[idx] = str(v)
 
     # Устанавливает все значения по ключу
@@ -108,11 +138,11 @@ class IniFile:
         self.name = name
 
     # Получает значение по ключу
-    def get(self, k, idx = 0):
+    def get(self, k, idx=0):
         return self.data.get(k, idx)
 
     # Устанавливает значение по ключу
-    def set(self, k, v, idx = 0):        
+    def set(self, k, v, idx=0):
         self.data.set(k, v, idx)
 
     # Читает настройки из файла
@@ -146,7 +176,7 @@ class IniFile:
         for key in self.iniData().keys():
             res.append(key)
         return res
-    
+
     # Проверяет есть ли значение по ключу
     def exists(self, k):
         return self.data.exists(k)
@@ -154,7 +184,7 @@ class IniFile:
     # Возвращает количество элементов
     def count(self):
         return len(self.iniData().values())
-    
+
     # Очищает данные
     def clear(self):
         self.data.clear()
@@ -177,11 +207,12 @@ class Debug:
         if (self.isDebug == 1):
             message = str(MOD.secCounter()) + ' # ' + msg + '\r\n'
             self.serial.send(message, self.speed, self.bytetype)
-    
+
     # Отправляет в отладку байт
     def sendbyte(self, byte):
         if (self.isDebug == 1):
-            self.serial.send(str(MOD.secCounter()) + ' # ', self.speed, self.bytetype)
+            self.serial.send(str(MOD.secCounter()) + ' # ',
+                             self.speed, self.bytetype)
             self.serial.sendbyte(byte, self.speed, self.bytetype)
             self.serial.send('\r\n', self.speed, self.bytetype)
 
@@ -194,15 +225,15 @@ class Serial:
 
     # Открывает порт
     def open(self, speed, bt):
-        if (self.lastSpeed != speed) or (self.lastBt != bt):            
+        if (self.lastSpeed != speed) or (self.lastBt != bt):
             rs = SER.set_speed(speed, bt)
             if rs == -1:
                 raise Exception, 'Regular. port open failed'
             self.lastBt = bt
-            self.lastSpeed = speed            
+            self.lastSpeed = speed
 
     # Возвращает массив данных, полученных в течении времени(timeout)
-    def receive(self, speed, bt, timeout = 1):
+    def receive(self, speed, bt, timeout=1):
         self.open(speed, bt)
         return SER.receive(timeout)
 
@@ -210,7 +241,7 @@ class Serial:
     def receivebyte(self, speed, bt):
         self.open(speed, bt)
         return SER.receivebyte()
-            
+
     # Считывает один байт с таймаутом
     def receivebyte(self, speed, bt, timeout=0):
         self.open(speed, bt)
@@ -220,7 +251,7 @@ class Serial:
     def send(self, data, speed, bt):
         self.open(speed, bt)
         SER.send(data)
-    
+
     # Отправляет байт
     def sendbyte(self, byte, speed, bt):
         self.open(speed, bt)
@@ -229,7 +260,7 @@ class Serial:
 # Для работы с модемом через AT команды
 # Отрефакторить, много мусора
 class Gsm:
-    def __init__(self, config, serial, debug):        
+    def __init__(self, config, serial, debug):
         self.config = config
         self.debug = debug
         self.serial = serial
@@ -275,7 +306,7 @@ class Gsm:
     # Отсылает команду через и ждёт указанного ответа
     def sendATAndWait(self, mdm, atcom, atres, trys=1, timeout=1):
         mdm_timeout = int(self.config.get('TIMEOUT_MDM'))
-        s = mdm.receive(mdm_timeout)        
+        s = mdm.receive(mdm_timeout)
         result = -2
         while(1):
             self.debug.send('DATA AT OUT: ' + atcom)
@@ -297,7 +328,7 @@ class Gsm:
             if((trys <= 0) or (result == 0)):
                 break
             MOD.sleep(15)
-            
+
         return (result, s)
 
     # Отсылает команду через MDM и ждёт указанного ответа
@@ -342,7 +373,7 @@ class Gsm:
         self.sendATMdmDefault('AT\\R0\r', 'OK')
         self.sendATMdmDefault(
             'AT#ENHRST=2,' + self.config.get('REBOOT_PERIOD') + '\r', 'OK')
-        
+
         self.debug.send('initModem() passed OK')
 
     # Инициализирует SIM карту
@@ -436,7 +467,7 @@ class Gsm:
             s = s + self.receiveMdm()
             if len(s) >= length:
                 break
-        
+
         return s[:length]
 
     # Читает из MDM2 сообщение заданной длины
@@ -466,7 +497,7 @@ class SmsData:
     def __init__(self, id, recepient, text):
         self.id = id
         self.recepient = recepient
-        self.text = text        
+        self.text = text
 
 # Для работы с СМС
 class SmsManager:
@@ -477,18 +508,22 @@ class SmsManager:
     # Инициализирует контект
     def initContext(self, isTextMode=TRUE):
         self.debug.send("Start ini sms context")
-        self.gsm.sendATMdmDefault("AT+CMGF=1\r", "OK")               # Текстовый режим
-        self.gsm.sendATMdmDefault("AT+CNMI=1,0\r", "OK")             # Блокирует сигнализацию получения СМС
-        self.gsm.sendATMdmDefault("AT+CSCS=GSM\r", "OK")             # Устанавливает формат GSM как основной charset
+        self.gsm.sendATMdmDefault("AT+SMSMODE=1\r", "OK")
+        # Текстовый режим
+        self.gsm.sendATMdmDefault("AT+CMGF=1\r", "OK")
+        # Блокирует сигнализацию получения СМС
+        self.gsm.sendATMdmDefault("AT+CNMI=1,0\r", "OK")
+        # Устанавливает формат GSM как основной charset
+        self.gsm.sendATMdmDefault("AT+CSCS=GSM\r", "OK")
         self.gsm.sendATMdmDefault("AT+CSMP=1,167,0,8\r", "OK")
         self.debug.send("Sms context initialized")
 
     # Отправляет СМС
     def sendSms(self, recepient, text):
-        self.gsm.sendATMdmDefault('AT+CMGS="' + recepient +'",145\r', ">")
+        self.gsm.sendATMdmDefault('AT+CMGS="' + recepient + '",145\r', ">")
         txt = encodeUcs2(text)
         self.gsm.sendATMdm(txt)
-        self.gsm.sendATMdmDefault('\x1a', "OK") # отсылает CTRL+Z
+        self.gsm.sendATMdmDefault('\x1a', "OK")  # отсылает CTRL+Z
 
     # Возвращает список новых СМС
     def listSms(self):
@@ -519,6 +554,7 @@ class SmsManager:
                 i = i + 1
                 recepient = headerDataItems[2].replace('"', "")
                 data = items[i].strip()
+                data = decodeUcs2(data)
                 sms = SmsData(id, recepient, data)
                 lst.append(sms)
 
