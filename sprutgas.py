@@ -237,57 +237,56 @@ class AlarmParser:
     # Преобразует тревоги в массив байт тревог
     def encodeAlarmsToBups(self, alarms):
         one = 0
-        #one = 0x10
         two = 0x80
         three = 0xA0
         four = 0xC0
         for alarm in alarms:
             # Второй порог СН4
-            if alarm.code == 1:
-                one = one or 0x41
+            if alarm == 1:
+                one = one | 0x41
             # Второй порог СО
-            if alarm.code == 2:                
-                one = one or 0x01
+            if alarm == 2:                
+                one = one | 0x01
             # Неисправность
-            if alarm.code == 3:
-                one = one or 0x04
+            if alarm == 3:
+                one = one | 0x04
             # Первый порог СН4
-            if alarm.code == 4:
-                one = one or 0x02
+            if alarm == 4:
+                one = one | 0x02
             # Первый порог СО
-            if alarm.code == 5:
-                one = one or 0x08
+            if alarm == 5:
+                one = one | 0x08
             # Первый порог СН4
-            if alarm.code == 6:
-                one = one or 0x48
+            if alarm == 6:
+                one = one | 0x48
             # Первый порог СО
-            if alarm.code == 7:
-                one = one or 0x44
+            if alarm == 7:
+                one = one | 0x44
             # Клапан закрыт
-            if alarm.code == 9:
-                one = one or 0x10
+            if alarm == 9:
+                one = one | 0x10
 
-            if alarm.code == 20:
-                two = two or 0x01
-            if alarm.code == 21:
-                two = two or 0x02
-            if alarm.code == 22:
-                two = two or 0x04
-            if alarm.code == 23:
-                two = two or 0x08
-            if alarm.code == 24:
-                two = two or 0x10
+            if alarm == 20:
+                two = two | 0x01
+            if alarm == 21:
+                two = two | 0x02
+            if alarm == 22:
+                two = two | 0x04
+            if alarm == 23:
+                two = two | 0x08
+            if alarm == 24:
+                two = two | 0x10
             
-            if alarm.code == 40:
-                four = four or 0x01
-            if alarm.code == 41:
-                four = four or 0x02
-            if alarm.code == 42:
-                four = four or 0x04
-            if alarm.code == 43:
-                four = four or 0x08
-            if alarm.code == 44:
-                four = four or 0x10
+            if alarm == 40:
+                four = four | 0x01
+            if alarm == 41:
+                four = four | 0x02
+            if alarm == 42:
+                four = four | 0x04
+            if alarm == 43:
+                four = four | 0x08
+            if alarm == 44:
+                four = four | 0x10
             
         return [one, two, three, four]
 
@@ -848,13 +847,16 @@ class SmsRecieveWorker:
 
     # Обрабатывает SMS и возвращает описание тревоги
     def processSms(self, sms):
+        self.debug.send("Process SMS")
         items = sms.text.split("-")
         if (len(items) < 2):
+            self.debug.send("Wrong SMS format")
             return None
 
         codeStr = items[0].strip()
         try:
             code = int(codeStr)
+            self.debug.send("Alarm code: " + codeStr)
             self.alarms[code] = core.TRUE
         except:
             return None
@@ -869,7 +871,9 @@ class SmsRecieveWorker:
     # Отправляет тревоги на пульт
     def sendAlarms(self):
         self.debug.send("Send alarms")
-        alarms = self.alarmParser.encodeAlarmsToBups(self.alarms.keys())
+        keys = self.alarms.keys()
+        self.debug.send(str(keys))
+        alarms = self.alarmParser.encodeAlarmsToBups(keys)
         self.debug.send(str(alarms))
 
         # DATA2, DATA3, DATA4, DATA0        
@@ -887,8 +891,8 @@ class SmsRecieveWorker:
     # Основная работа
     def work(self):
         self.debug.send("Start work")
-        for i in xrange(1, 20):
-        #while(core.TRUE):
+        #for i in xrange(1, 20):
+        while(core.TRUE):
             # Ожидает SMS
             if MOD.secCounter() > self.smsReadTimer:
                 self.debug.send("Get sms")

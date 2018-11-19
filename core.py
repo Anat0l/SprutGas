@@ -508,7 +508,7 @@ class SmsManager:
     # Инициализирует контект
     def initContext(self, isTextMode=TRUE):
         self.debug.send("Start ini sms context")
-        self.gsm.sendATMdmDefault("AT+SMSMODE=1\r", "OK")
+        self.gsm.sendATMdmDefault("AT#SMSMODE=1\r", "OK")
         # Текстовый режим
         self.gsm.sendATMdmDefault("AT+CMGF=1\r", "OK")
         # Блокирует сигнализацию получения СМС
