@@ -263,7 +263,7 @@ class AlarmParser:
             if alarm == 7:
                 one = one | 0x44
             # Клапан закрыт
-            if alarm == 9:
+            if alarm == CLAPAN_CLOSED:
                 one = one | 0x10
 
             if alarm == 20:
@@ -857,7 +857,12 @@ class SmsRecieveWorker:
         try:
             code = int(codeStr)
             self.debug.send("Alarm code: " + codeStr)
-            self.alarms[code] = core.TRUE
+
+            if code == CLAPAN_OPENED:
+                if self.alarms.has_key(CLAPAN_CLOSED) == core.TRUE:
+                    del self.alarms[CLAPAN_CLOSED]
+            else:
+                self.alarms[code] = core.TRUE
         except:
             return None
 
