@@ -520,7 +520,8 @@ class SmsManager:
 
     # Отправляет СМС
     def sendSms(self, recepient, text):
-        self.gsm.sendATMdmDefault('AT+CMGS="' + recepient + '",145\r', ">")
+        recepient = recepient.replace("+7", "8")
+        self.gsm.sendATMdmDefault('AT+CMGS="' + recepient + '",129\r', ">")
         txt = encodeUcs2(text)
         self.gsm.sendATMdm(txt)
         self.gsm.sendATMdmDefault('\x1a', "OK")  # отсылает CTRL+Z
