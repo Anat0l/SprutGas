@@ -639,7 +639,19 @@ class BupsWorker:
             self.debug.send("Wait for SMS read")
             return
 
-        allSms = self.smsManager.listSms()
+        allSms = None
+
+        try:
+            allSms = self.smsManager.listSms()
+        except:
+            pass
+        
+        self.smsManager.deleteAll()
+        self.resetSmsTimer()
+
+        if allSms == None:
+            return
+
         recepients = []
         for sms in allSms:
             for recep in self.recepients:
@@ -677,10 +689,7 @@ class BupsWorker:
                 txt = txt + "Клапан закрыт"
 
         for rec in recepients:
-            self.smsManager.sendSms(rec, txt)
-
-        self.smsManager.deleteAll()
-        self.resetSmsTimer()
+            self.smsManager.sendSms(rec, txt)        
 
     # Проверяет есть ли связь. Отсылает SMS если не было связи в течении 3-х минут
     # Или отсылает SMS что связь появилась
@@ -771,23 +780,25 @@ class BupsWorker:
     def work(self):
         self.debug.send("Start work")
         while(core.TRUE):
-        #for i in xrange(1, 2):            
-            # Отсылает запрос состояния каждому газоанализатору
-            bupsState = self.readBupsState()
-            self.checkConnection(bupsState)
-            
-            # Пока состояние неизвестно не отсылает ничего
-            if (bupsState != None) and (self.globalConnected != None):
-                alarms = self.processStates(bupsState)
-                self.debug.send("ALARMS COUNT: " + str(len(alarms)))
-                for alarm in alarms:
-                    txt = str(alarm.code) + " - " + alarm.text
-                    self.sendToRecepients(txt)
+            try:
+                # Отсылает запрос состояния каждому газоанализатору
+                bupsState = self.readBupsState()
+                self.checkConnection(bupsState)
+                
+                # Пока состояние неизвестно не отсылает ничего
+                if (bupsState != None) and (self.globalConnected != None):
+                    alarms = self.processStates(bupsState)
+                    self.debug.send("ALARMS COUNT: " + str(len(alarms)))
+                    for alarm in alarms:
+                        txt = str(alarm.code) + " - " + alarm.text
+                        self.sendToRecepients(txt)
 
-            # Получает СМС и отправляет последнее состояние
-            self.processSms()
-            # Сбрасывает охранный таймер
-            self.resetWatchdog()
+                # Получает СМС и отправляет последнее состояние
+                self.processSms()
+                # Сбрасывает охранный таймер
+                self.resetWatchdog()
+            except Exception, e:
+                self.debug.send(str(e))
 
 # Обеспечивает работу в режиме приема СМС и передачи на пульт
 class SmsRecieveWorker:
@@ -898,23 +909,29 @@ class SmsRecieveWorker:
         self.debug.send("Start work")
         #for i in xrange(1, 20):
         while(core.TRUE):
-            # Ожидает SMS
-            if MOD.secCounter() > self.smsReadTimer:
-                self.debug.send("Get sms")
-                smsList = self.smsManager.listSms()
-                for sms in smsList:
-                    for recepient in self.recepients:
-                        smsRec = sms.recepient.replace("+7", "8")
-                        rec = recepient.replace("+7", "8")
-                        if smsRec == rec:
-                            self.processSms(sms)
+            try:
+                # Ожидает SMS
+                if MOD.secCounter() > self.smsReadTimer:
+                    self.debug.send("Get sms")
+                    try:
+                        smsList = self.smsManager.listSms()
+                        for sms in smsList:
+                            for recepient in self.recepients:
+                                smsRec = sms.recepient.replace("+7", "8")
+                                rec = recepient.replace("+7", "8")
+                                if smsRec == rec:
+                                    self.processSms(sms)
+                    except:
+                        pass
 
-                self.smsManager.deleteAll()
-                self.resetSmsTimer()
-            
-            # Отсылает 4 байта с тревогами на пульт(адрес пульта в INI)
-            self.sendAlarms()
-            self.resetWatchdog()
+                    self.smsManager.deleteAll()
+                    self.resetSmsTimer()
+                
+                # Отсылает 4 байта с тревогами на пульт(адрес пульта в INI)
+                self.sendAlarms()
+                self.resetWatchdog()
+            except Exception, e:
+                 self.debug.send(str(e))
 
 try:
     settings = core.IniFile("settings.ini")
