@@ -566,6 +566,8 @@ class BupsWorker:
         
         self.smsManager = core.SmsManager(self.gsm, self.debug)
         self.smsManager.initContext()
+        # Удаляет все СМС
+        self.smsManager.deleteAll()
         self.smsReadTimer = 0
         self.resetSmsTimer()
 
@@ -582,6 +584,7 @@ class BupsWorker:
 
     # Сбрасывает таймер чтения СМС
     def resetSmsTimer(self):
+        self.debug.send("Reset Sms Timer")
         self.smsReadTimer = MOD.secCounter() + int(self.config.get(SMS_READ_PERIOD))
 
     # Инициализирует охранный таймер
@@ -643,8 +646,9 @@ class BupsWorker:
 
         try:
             allSms = self.smsManager.listSms()
-        except:
-            pass
+        except Exception, e:
+            self.debug.send("List SMS error")
+            self.debug.send(str(e))
         
         self.smsManager.deleteAll()
         self.resetSmsTimer()
@@ -798,6 +802,7 @@ class BupsWorker:
                 # Сбрасывает охранный таймер
                 self.resetWatchdog()
             except Exception, e:
+                self.debug.send("Work error")
                 self.debug.send(str(e))
 
 # Обеспечивает работу в режиме приема СМС и передачи на пульт
@@ -832,6 +837,7 @@ class SmsRecieveWorker:
 
      # Сбрасывает таймер чтения СМС
     def resetSmsTimer(self):
+        self.debug.send("Reset Sms Timer")
         self.smsReadTimer = MOD.secCounter() + int(self.config.get(SMS_READ_PERIOD))
 
     # Инициализирует охранный таймер
@@ -907,7 +913,6 @@ class SmsRecieveWorker:
     # Основная работа
     def work(self):
         self.debug.send("Start work")
-        #for i in xrange(1, 20):
         while(core.TRUE):
             try:
                 # Ожидает SMS

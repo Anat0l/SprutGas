@@ -586,6 +586,5 @@ class SmsManager:
 
     # Удаляет все СМС
     def deleteAll(self):
-        smsList = self.listSms()
-        for smsData in smsList:
-            self.deleteSms(smsData.id)
+        self.debug.send("Delete all sms")
+        self.gsm.sendATMdm('AT+CMGD=1,4\r')
