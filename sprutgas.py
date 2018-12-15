@@ -159,6 +159,9 @@ class AlarmStorage:
         for alarm in res:
             del self.alarms[alarm.code]
 
+        # Очищает снятые тревоги в буффере
+        res = []
+
         # Ищет установленные тревоги
         for inAlarm in alarms:
             if not self.alarms.has_key(inAlarm.code):
@@ -176,10 +179,10 @@ class AlarmParser:
     # Парсит тревоги газ анализаторов и первый байт бупса
     def parseOne(self, code):
         alarms = []
-        if (code & 0x40 > 0) and (code & 1 > 0):
-            alarms.append(Alarm(1, "Второй порог СН4"))
+        if (code & 0x40 > 0) and (code & 0x01 > 0):
+            alarms.append(Alarm(1, "Второй порог СО"))
         if (code & 0x40 == 0) and (code & 0x01 > 0):
-            alarms.append(Alarm(2, "Второй порог СО"))
+            alarms.append(Alarm(2, "Второй порог СН4"))
         if (code & 0x04 > 0):
             alarms.append(Alarm(3, "Неисправность"))
         if (code & 0x01 == 0) and (code & 0x02 > 0) and (code & 0x04 == 0) and (code & 0x40 == 0):
@@ -241,10 +244,10 @@ class AlarmParser:
         three = 0xA0
         four = 0xC0
         for alarm in alarms:
-            # Второй порог СН4
+            # Второй порог СО
             if alarm == 1:
                 one = one | 0x41
-            # Второй порог СО
+            # Второй порог СН4
             if alarm == 2:                
                 one = one | 0x01
             # Неисправность
@@ -792,10 +795,12 @@ class BupsWorker:
                 # Пока состояние неизвестно не отсылает ничего
                 if (bupsState != None) and (self.globalConnected != None):
                     alarms = self.processStates(bupsState)
-                    self.debug.send("ALARMS COUNT: " + str(len(alarms)))
+                    alarmIds = []                    
                     for alarm in alarms:
                         txt = str(alarm.code) + " - " + alarm.text
+                        alarmIds.append(alarm.code)
                         self.sendToRecepients(txt)
+                    self.debug.send("ALARMS: " + str(alarmIds))
 
                 # Получает СМС и отправляет последнее состояние
                 self.processSms()
