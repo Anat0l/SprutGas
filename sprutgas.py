@@ -2,7 +2,10 @@ import core
 import MOD
 
 # работа напрямую с газоанализаторами
-DIRECT_MODE = "0"
+#DIRECT_MODE = "0"
+
+# работа с ведущим газоанализатором
+MASTER_GAS_MODE = "0"
 # работа с БУПС
 BUPS_MODE = "1"
 # приём SMS и передача на пульт
@@ -43,6 +46,8 @@ MAX_ADDRESS = 255
 READ_TIMEOUT = 1
 # Таймаут чтения БУПС
 READ_BUPS_TIMEOUT = 10
+# Таймаут чтения ведущего газоанализатора
+READ_MASTER_GAS_TIMEOUT = 10
 # Количество байт в пакете от БУПС
 BUPS_PACK_SIZE = 8
 
@@ -54,6 +59,9 @@ WORK_DELAY = 1
 
 # Адресс БУПС
 BUPS_NETWORK = 0xE1
+
+# Адрес ведущего газоанализатора
+MASTER_GAS_NETWORK = 0x00
 
 # Текст сообщений
 NO_CONNECTION_TEXT = "Нет связи с системой СГК"
@@ -549,6 +557,232 @@ class DirectWorker:
             # Сбрасывает охранный таймер
             self.resetWatchdog()
 
+# Обеспечивает работу в режиме прослушивания ведущего назоанализатора
+class MasterGasWorker:
+    # Конструктор
+    def __init__(self, config):
+        self.config = config
+
+        self.speed = config.get(SER_SP)
+        self.serial = core.Serial()        
+
+        isDebug = config.get(DEBUG_SER) == "1"
+        debugSpeed = config.get(DEBUG_SER_SP)
+        debugBytetype = config.get(DEBUG_SER_OD)
+        self.debug = core.Debug(isDebug, self.serial,
+                                debugSpeed, debugBytetype)
+        
+        self.gsm = core.Gsm(config, self.serial, self.debug)
+        self.gsm.simpleInit()
+        
+        self.smsManager = core.SmsManager(self.gsm, self.debug)
+        self.smsManager.initContext()
+        # Удаляет все СМС
+        self.smsManager.deleteAll()
+        self.smsReadTimer = 0
+        self.resetSmsTimer()
+
+        self.alarmParser = AlarmParser()
+        self.alarmOne = AlarmStorage()
+        self.recepientHelper = RecepientHelper(self.config, self.gsm, self.debug)
+        self.globalConnected = None
+        
+        # Таймаут отсутствия связи в неопределенном состоянии
+        self.onConnectionTimeout = MOD.secCounter() + int(self.config.get(CONNECTION_TIMEOUT))
+        self.initWatchdog()
+
+    # Сбрасывает таймер чтения СМС
+    def resetSmsTimer(self):
+        self.debug.send("Reset Sms Timer")
+        self.smsReadTimer = MOD.secCounter() + int(self.config.get(SMS_READ_PERIOD))
+
+    # Инициализирует охранный таймер
+    def initWatchdog(self):
+        MOD.watchdogEnable(int(self.config.get(WATCHDOG_PERIOD)))
+
+    # Сбрасывает охранный таймер
+    def resetWatchdog(self):
+        MOD.watchdogReset()    
+
+    # Обрабатывает тревоги загоанализатора
+    def processStates(self, gasState):
+        total = []
+        
+        alarms = self.alarmParser.parseOne(gasState)
+        for alarm in self.alarmOne.add(alarms):
+            total.append(alarm)
+
+        return total
+
+    # Отправляет всем
+    def sendToRecepients(self, text):
+        for recepient in self.recepients:
+            self.debug.send("SEND ALARM TO RECEPIENTS")
+            self.smsManager.sendSms(recepient, text)
+            #self.debug.send(text)
+
+    # Возвращает все тревоги
+    def getTotalAlarms(self):
+        total = []
+        for alarm in self.alarmOne.alarms.values():
+            total.append(alarm)
+        return total
+
+    # Обрабатывает SMS с командой
+    def processSms(self):
+        self.debug.send("Process SMS")
+
+        if MOD.secCounter() < self.smsReadTimer:
+            self.debug.send("Wait for SMS read")
+            return
+
+        allSms = None
+
+        try:
+            allSms = self.smsManager.listSms()
+        except Exception, e:
+            self.debug.send("List SMS error")
+            self.debug.send(str(e))
+        
+        self.smsManager.deleteAll()
+        self.resetSmsTimer()
+
+        if allSms == None:
+            return
+
+        recepients = []
+        for sms in allSms:
+            for recep in self.recepients:
+                smsRec = sms.recepient.replace("+7", "8")
+                storRec = recep.replace("+7", "8")
+                self.debug.send("SMS recepient: " + smsRec)
+                self.debug.send("Stored recepient: " + storRec)
+                if smsRec == storRec:
+                    recepients.append(storRec)
+        
+        self.debug.send("Recepients: " + str(recepients))        
+        totalAlarms = self.getTotalAlarms()
+        count = len(totalAlarms)
+        self.debug.send("Alarm count: " + str(count))
+        txt = ""
+        # Клапан или открыт или закрыт
+        if count == 0:
+            txt = "Состояние неизвестно"
+        elif count == 1:
+            alarm = totalAlarms[0]
+            txt = "Аварий нет. " + alarm.text
+        else:
+            clapanIsOpen = core.FALSE
+            for alarm in totalAlarms:
+                if alarm.code == CLAPAN_OPENED:
+                    clapanIsOpen = core.TRUE
+                elif alarm.code == CLAPAN_CLOSED:
+                    clapanIsOpen = core.FALSE
+                else:
+                    txt = txt + alarm.text + ", "
+            
+            if clapanIsOpen == core.TRUE:
+                txt = txt + "Клапан открыт"
+            else:
+                txt = txt + "Клапан закрыт"
+
+        for rec in recepients:
+            self.smsManager.sendSms(rec, txt)        
+
+    # Проверяет есть ли связь. Отсылает SMS если не было связи в течении 3-х минут
+    # Или отсылает SMS что связь появилась
+    def checkConnection(self, gasState):
+        self.debug.send("Check connection")
+
+        connected = core.FALSE
+        if gasState != None:
+            connected = core.TRUE
+
+        self.debug.send("Connected: " + str(connected))
+        self.debug.send("Global Connected: " + str(self.globalConnected))
+        
+        # Если неопределённое состояние
+        if self.globalConnected == None:
+            if (connected == core.FALSE) and (MOD.secCounter() > self.onConnectionTimeout):
+                self.sendToRecepients(NO_CONNECTION_TEXT)
+                self.globalConnected = core.FALSE
+            elif connected == core.TRUE:
+                self.sendToRecepients(CONNECTED_TEXT)
+                self.globalConnected = core.TRUE
+        # Если находится в состоянии подключения
+        # Отсылает СМС и устанавливает состояние не соединено
+        elif self.globalConnected == core.TRUE:
+            if connected == core.FALSE:
+                self.sendToRecepients(NO_CONNECTION_TEXT)
+                self.globalConnected = core.FALSE
+        # Если не подключен
+        else:
+            if connected == core.TRUE:
+                self.sendToRecepients(CONNECTED_TEXT)
+                self.globalConnected = core.TRUE
+
+    # Читает четыре байта состояний
+    def readGasState(self):
+        self.debug.send("Read gas state")
+               
+        data = []
+        state = 0 # состояние: начало пакета(0), тревога(1)
+
+        timeout = MOD.secCounter() + READ_MASTER_GAS_TIMEOUT
+        gasState = None
+        while (timeout > MOD.secCounter()):
+            byte = self.serial.receivebyte(self.speed, '8N1', 0)
+            # Ищет начало пакета
+            if state == 0:
+                if (byte == MASTER_GAS_NETWORK):
+                    state = 1
+                continue                                        
+            
+            if state == 1:                
+                gasState = byte
+                break
+
+        # Очищает буффер модема, что бы не переполнился
+        clean = self.serial.receive(self.speed, '8N1', 0)
+        self.debug.send("Bytes to clean: " + str(len(clean)))
+
+        self.debug.send(str(gasState))
+
+        return gasState
+
+    # Запускает
+    def start(self):
+        self.recepients = self.recepientHelper.getRecepients()
+        self.debug.send(str(self.recepients))
+        self.work()
+    
+    # Основная работа
+    def work(self):
+        self.debug.send("Start work")
+        while(core.TRUE):
+            try:
+                # Отсылает запрос состояния каждому газоанализатору
+                gasState = self.readGasState()
+                self.checkConnection(gasState)
+                
+                # Пока состояние неизвестно не отсылает ничего
+                if (gasState != None) and (self.globalConnected != None):
+                    alarms = self.processStates(gasState)
+                    alarmIds = []                    
+                    for alarm in alarms:
+                        txt = str(alarm.code) + " - " + alarm.text
+                        alarmIds.append(alarm.code)
+                        self.sendToRecepients(txt)
+                    self.debug.send("ALARMS: " + str(alarmIds))
+
+                # Получает СМС и отправляет последнее состояние
+                self.processSms()
+                # Сбрасывает охранный таймер
+                self.resetWatchdog()
+            except Exception, e:
+                self.debug.send("Work error")
+                self.debug.send(str(e))
+
 # Обеспечивает работу в режиме прослушивания БУПС
 class BupsWorker:
     # Конструктор
@@ -949,8 +1183,8 @@ try:
 
     mode = settings.get(WORK_MODE)
     worker = None
-    if mode == DIRECT_MODE:
-        worker = DirectWorker(settings)
+    if mode == MASTER_GAS_MODE:
+        worker = MasterGasWorker(settings)
     elif mode == BUPS_MODE:
         worker = BupsWorker(settings)
     elif mode == SMS_RECIEVE_MODE:
