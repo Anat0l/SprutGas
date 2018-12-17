@@ -61,7 +61,7 @@ WORK_DELAY = 1
 BUPS_NETWORK = 0xE1
 
 # Адрес ведущего газоанализатора
-MASTER_GAS_NETWORK = 0x00
+MASTER_GAS_NETWORK = 0xE1
 
 # Текст сообщений
 NO_CONNECTION_TEXT = "Нет связи с системой СГК"
@@ -701,6 +701,9 @@ class MasterGasWorker:
         self.debug.send("Connected: " + str(connected))
         self.debug.send("Global Connected: " + str(self.globalConnected))
         
+        if connected == core.TRUE:
+            self.onConnectionTimeout = MOD.secCounter() + int(self.config.get(CONNECTION_TIMEOUT))
+
         # Если неопределённое состояние
         if self.globalConnected == None:
             if (connected == core.FALSE) and (MOD.secCounter() > self.onConnectionTimeout):
@@ -712,7 +715,7 @@ class MasterGasWorker:
         # Если находится в состоянии подключения
         # Отсылает СМС и устанавливает состояние не соединено
         elif self.globalConnected == core.TRUE:
-            if connected == core.FALSE:
+            if (connected == core.FALSE) and (MOD.secCounter() > self.onConnectionTimeout):
                 self.sendToRecepients(NO_CONNECTION_TEXT)
                 self.globalConnected = core.FALSE
         # Если не подключен
@@ -736,17 +739,19 @@ class MasterGasWorker:
             if state == 0:
                 if (byte == MASTER_GAS_NETWORK):
                     state = 1
-                continue                                        
+                continue
             
-            if state == 1:                
+            if state == 1:
                 gasState = byte
                 break
+            else:
+                state = 0
+
+        self.debug.send("Gas state: " + str(gasState))
 
         # Очищает буффер модема, что бы не переполнился
         clean = self.serial.receive(self.speed, '8N1', 0)
-        self.debug.send("Bytes to clean: " + str(len(clean)))
-
-        self.debug.send(str(gasState))
+        self.debug.send("Bytes to clean: " + str(len(clean)))        
 
         return gasState
 
@@ -768,7 +773,7 @@ class MasterGasWorker:
                 # Пока состояние неизвестно не отсылает ничего
                 if (gasState != None) and (self.globalConnected != None):
                     alarms = self.processStates(gasState)
-                    alarmIds = []                    
+                    alarmIds = []
                     for alarm in alarms:
                         txt = str(alarm.code) + " - " + alarm.text
                         alarmIds.append(alarm.code)
@@ -944,6 +949,9 @@ class BupsWorker:
         self.debug.send("Connected: " + str(connected))
         self.debug.send("Global Connected: " + str(self.globalConnected))
         
+        if connected == core.TRUE:
+            self.onConnectionTimeout = MOD.secCounter() + int(self.config.get(CONNECTION_TIMEOUT))
+
         # Если неопределённое состояние
         if self.globalConnected == None:
             if (connected == core.FALSE) and (MOD.secCounter() > self.onConnectionTimeout):
@@ -955,7 +963,7 @@ class BupsWorker:
         # Если находится в состоянии подключения
         # Отсылает СМС и устанавливает состояние не соединено
         elif self.globalConnected == core.TRUE:
-            if connected == core.FALSE:
+            if (connected == core.FALSE) and (MOD.secCounter() > self.onConnectionTimeout):
                 self.sendToRecepients(NO_CONNECTION_TEXT)
                 self.globalConnected = core.FALSE
         # Если не подключен
