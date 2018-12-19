@@ -133,7 +133,10 @@ class RecepientHelper:
         if sendMode == SEND_MODE_PHONE:
             return phones
         elif sendMode == SEND_MODE_MODEM:
-            return [phones[0]]
+            if (len(phones) > 0):
+                return [phones[0]]
+            else:
+                return []
 
 # Хранилище тревог
 # Если есть изменение тревоги сигнализирует об этом
@@ -222,8 +225,20 @@ class AlarmParser:
 
     # Парсит тревоги из третьего байта бупс
     def parseThree(self, code):
-        # Не нужен пока что
-        pass
+        alarms = []
+        if (code & 0x01 > 0):
+            alarms.append(Alarm(30, "Авария 3"))
+        if (code & 0x02 > 0):
+            alarms.append(Alarm(31, "Авария 4"))
+        if (code & 0x04 > 0):
+            alarms.append(Alarm(32, "Авария 5"))
+        if (code & 0x08 > 0):
+            alarms.append(Alarm(33, "Авария 6"))
+        if (code & 0x10 > 0):
+            alarms.append(Alarm(34, "Авария 7"))
+        
+        return alarms
+
 
     # Парсит тревоги из четвёртого байта бупс
     def parseFour(self, code):
@@ -556,6 +571,7 @@ class BupsWorker:
         self.alarmParser = AlarmParser()
         self.alarmOne = AlarmStorage()
         self.alarmTwo = AlarmStorage()
+        self.alarmThree = AlarmStorage()
         self.alarmFour = AlarmStorage()
         self.recepientHelper = RecepientHelper(self.config, self.gsm, self.debug)
         self.globalConnected = None
@@ -592,6 +608,10 @@ class BupsWorker:
         for alarm in self.alarmTwo.add(alarms):
             total.append(alarm)
         
+        alarms = self.alarmParser.parseThree(bupsState.three)
+        for alarm in self.alarmThree.add(alarms):
+            total.append(alarm)
+        
         alarms = self.alarmParser.parseFour(bupsState.four)
         for alarm in self.alarmFour.add(alarms):
             total.append(alarm)
@@ -611,6 +631,8 @@ class BupsWorker:
         for alarm in self.alarmOne.alarms.values():
             total.append(alarm)
         for alarm in self.alarmTwo.alarms.values():
+            total.append(alarm)
+        for alarm in self.alarmThree.alarms.values():
             total.append(alarm)
         for alarm in self.alarmFour.alarms.values():
             total.append(alarm)
